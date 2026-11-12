@@ -1,0 +1,725 @@
+@page "/"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject IMappingSystem MappingSystem
+@inject RailRoutePlanner RoutePlanner
+@inject RailwayPipelineOrchestrator Orchestrator
+@inject ChaosAndTrafficController ChaosController
+@inject ImmutableAppStateContainer AppState
+
+<PageTitle>RailFlow — Functional C# &amp; Blazor Multimodal Engine</PageTitle>
+
+<CascadingValue Value="AppState.CurrentRole">
+    <div class="railflow-shell">
+        <!-- Top Command Header -->
+        <header class="topbar">
+            <div class="brand-block">
+                <div class="brand-logo">RF</div>
+                <div>
+                    <h1>RailFlow <span class="version-pill">.NET 10 · Functional Core</span></h1>
+                    <p class="subtitle">Multimodal Route, Dynamic Pricing &amp; Telemetry Engine (Lectures L1–L9)</p>
+                </div>
+            </div>
+
+            <div class="topbar-controls">
+                <!-- Time-Travel Immutable State Undo/Redo (Criterion 4 & L33) -->
+                <div class="state-history-group" title="ImmutableStack<PlannerFormSnapshot> Time-Travel State">
+                    <button class="btn-chip" disabled="@(!AppState.CanUndo)" @onclick="HandleUndo">
+                        ↶ Undo (@AppState.UndoDepth)
+                    </button>
+                    <button class="btn-chip" disabled="@(!AppState.CanRedo)" @onclick="HandleRedo">
+                        ↷ Redo
+                    </button>
+                </div>
+
+                <!-- Role-Based Access Control Switcher (Criterion 9: RBAC Security) -->
+                <div class="rbac-switcher">
+                    <span class="rbac-label">RBAC Role:</span>
+                    <button class="role-btn @(AppState.CurrentRole == UserRole.Passenger ? "active" : "")"
+                            @onclick="() => SwitchRole(UserRole.Passenger)">
+                        Passenger
+                    </button>
+                    <button class="role-btn @(AppState.CurrentRole == UserRole.DispatcherAdmin ? "active" : "")"
+                            @onclick="() => SwitchRole(UserRole.DispatcherAdmin)">
+                        Dispatcher Admin
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- KPI Summary Row using Reusable TelemetryMetricCard Component (Criterion 2) -->
+        <section class="metrics-grid" aria-label="System Telemetry Metrics">
+            <TelemetryMetricCard Title="Active Pipeline State"
+                                 Value="@GetCurrentMonadBadge()"
+                                 Subtitle="Lecture L5/L6 Discriminated Union"
+                                 Badge="Maybe<T>"
+                                 AccentColor="cyan" />
+
+            <TelemetryMetricCard Title="BFS Memoization Hit Ratio"
+                                 Value="@($"{CacheStats.HitRatio:F1}%")"
+                                 Subtitle="@($"Hits: {CacheStats.CacheHits} · Misses: {CacheStats.CacheMisses} · Cached: {CacheStats.CachedEntries}")"
+                                 Badge="L8 Lazy<T>"
+                                 AccentColor="emerald" />
+
+            <TelemetryMetricCard Title="Active Track Roadworks"
+                                 Value="@($"{ChaosController.ActiveRoadworksStations.Count} Corridors")"
+                                 Subtitle="@($"Dynamic Tariff Factor: x{ChaosController.RoadworksMultiplier:F2}")"
+                                 Badge="L6 Traffic"
+                                 AccentColor="amber" />
+
+            <TelemetryMetricCard Title="RBAC &amp; SignalR Stream"
+                                 Value="@AppState.CurrentRole.ToString()"
+                                 Subtitle="@($"{AppState.LiveSignalRFeed.Count} Real-Time Events Logged")"
+                                 Badge="SignalR Hub"
+                                 AccentColor="violet" />
+        </section>
+
+        <!-- Navigation Tabs for the 5 Core Functional Modules -->
+        <nav class="module-tabs" role="tablist">
+            <button role="tab" class="tab-btn @(_activeTab == "planner" ? "active" : "")"
+                    @onclick='() => _activeTab = "planner"'>
+                1. Railway Route &amp; Pricing (L5–L6)
+            </button>
+            <button role="tab" class="tab-btn @(_activeTab == "bfs" ? "active" : "")"
+                    @onclick='() => _activeTab = "bfs"'>
+                2. BFS Graph &amp; Memoization (L8)
+            </button>
+            <button role="tab" class="tab-btn @(_activeTab == "trampoline" ? "active" : "")"
+                    @onclick='() => _activeTab = "trampoline"'>
+                3. Trampoline &amp; Curried CSV (L7)
+            </button>
+            <button role="tab" class="tab-btn @(_activeTab == "benchmarks" ? "active" : "")"
+                    @onclick='() => _activeTab = "benchmarks"'>
+                4. Live Benchmarks &amp; Combinators (L4 &amp; L9)
+            </button>
+            <button role="tab" class="tab-btn @(_activeTab == "chaos" ? "active" : "")"
+                    @onclick='() => _activeTab = "chaos"'>
+                5. RBAC Chaos &amp; SignalR Console
+            </button>
+        </nav>
+
+        <!-- TAB 1: RAILWAY ROUTE & PRICING PLANNER (L5 & L6) -->
+        @if (_activeTab == "planner")
+        {
+            <div class="workspace-grid">
+                <section class="panel-card">
+                    <span class="eyebrow">LECTURES L5_1 &amp; L6_1 — FUNCTIONAL CORE INPUT</span>
+                    <h2>Multimodal Route &amp; Package Configurator</h2>
+
+                    <div class="form-grid">
+                        <div class="form-field">
+                            <label for="originSelect">Origin Station (or type unknown to test <code>Nothing&lt;T&gt;</code>)</label>
+                            <input id="originSelect" class="input-control" list="station-list"
+                                   @bind="_originInput" placeholder="e.g. LONDON" />
+                        </div>
+
+                        <div class="form-field">
+                            <label for="destSelect">Destination Station</label>
+                            <input id="destSelect" class="input-control" list="station-list"
+                                   @bind="_destinationInput" placeholder="e.g. ZURICH" />
+                        </div>
+
+                        <datalist id="station-list">
+                            @foreach (var st in MappingSystem.GetAllStations())
+                            {
+                                <option value="@st.StationCode">@st.StationCode (@st.Latitude.ToString("F2"), @st.Longitude.ToString("F2"))</option>
+                            }
+                        </datalist>
+
+                        <div class="form-field">
+                            <label for="paxInput">Passengers</label>
+                            <input id="paxInput" type="number" min="1" max="20" class="input-control" @bind="_passengersInput" />
+                        </div>
+
+                        <div class="form-field">
+                            <label for="offeringSelect"><code>CustomerOffering</code> Discriminated Union (L5_1)</label>
+                            <select id="offeringSelect" class="input-control" @bind="_offeringKey">
+                                <option value="DayTripSingle">StandardDayTrip (Single Point-to-Point)</option>
+                                <option value="DayTripReturn">StandardDayTrip (Includes Return Leg +65%)</option>
+                                <option value="HolidayComfort">RailHoliday (3 Nights · 4-Star Comfort Hotel)</option>
+                                <option value="HolidayLuxury">RailHoliday (5 Nights · Luxury 5-Star Grand Hotel)</option>
+                                <option value="HolidayWithMeals">RailHolidayWithMeals (4 Nights · Alpine Dining + First Class Lounge)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="button-row">
+                        <button class="btn-primary" @onclick="ExecutePlannerPipeline">
+                            Execute Railway Monad Pipeline
+                        </button>
+                        <button class="btn-secondary" @onclick="TriggerNothingDemo">
+                            Test <code>Nothing&lt;T&gt;</code> (Unknown Station "ATLANTIS")
+                        </button>
+                        <button class="btn-danger-outline" @onclick="TriggerErrorDemo">
+                            Test <code>Error&lt;T&gt;</code> (Simulated Sensor Crash)
+                        </button>
+                    </div>
+
+                    @if (_validationWarning is not null)
+                    {
+                        <div class="validation-banner" role="alert">
+                            <strong>ValidatedUserInput Union Match:</strong> @_validationWarning
+                        </div>
+                    }
+                </section>
+
+                <!-- Generic Templated Component MaybeView<PricedItinerary> (Criterion 2 & 18) -->
+                <section class="panel-card">
+                    <span class="eyebrow">GENERIC TEMPLATED COMPONENT — <code>&lt;MaybeView TItem="PricedItinerary"&gt;</code></span>
+                    <h2>Pipeline Output &amp; Tariff Breakdown</h2>
+
+                    @if (_lastReport is not null)
+                    {
+                        <MaybeView TItem="PricedItinerary"
+                                   State="_lastReport.Outcome"
+                                   OnRetry="ResetChaosAndReExecute">
+                            <SomethingTemplate Context="itinerary">
+                                <div class="itinerary-summary">
+                                    <div class="route-banner">
+                                        <div>
+                                            <span class="station-pill">@itinerary.TrafficRoute.Route.Origin</span>
+                                            <span class="arrow-sep">➔</span>
+                                            <span class="station-pill">@itinerary.TrafficRoute.Route.Destination</span>
+                                        </div>
+                                        <div class="price-display">
+                                            @itinerary.Currency@itinerary.FinalPrice.ToString("F2")
+                                        </div>
+                                    </div>
+
+                                    <p class="traffic-note @(itinerary.TrafficRoute.HasRoadworksOrTrackMaintenance ? "warn" : "ok")">
+                                        @itinerary.TrafficRoute.TrafficAdvisory
+                                    </p>
+
+                                    <div class="segments-chain">
+                                        @foreach (var seg in itinerary.TrafficRoute.Route.Segments)
+                                        {
+                                            <div class="segment-chip">
+                                                <strong>@seg.FromStation → @seg.ToStation</strong>
+                                                <span>@seg.LineName · @seg.DistanceKm km · @seg.BaseMinutes min</span>
+                                            </div>
+                                        }
+                                    </div>
+
+                                    <ul class="audit-list">
+                                        @foreach (var line in itinerary.PipelineAuditLog)
+                                        {
+                                            <li>@line</li>
+                                        }
+                                    </ul>
+                                </div>
+                            </SomethingTemplate>
+                            <NothingTemplate>
+                                <div class="default-alert-box nothing-box">
+                                    <h4>Short-Circuited to <code>Nothing&lt;PricedItinerary&gt;</code></h4>
+                                    <p>
+                                        Station <strong>@_originInput</strong> or <strong>@_destinationInput</strong> was not found in
+                                        <code>IMappingSystem</code>. Downstream stages (<code>PlanRoute</code>, <code>CheckForRoadworks</code>,
+                                        <code>CalculatePrice</code>) were cleanly bypassed via <code>Bind</code> without throwing exceptions!
+                                    </p>
+                                    <button class="btn-secondary" @onclick="RestoreValidStations">Restore LONDON → ZURICH</button>
+                                </div>
+                            </NothingTemplate>
+                        </MaybeView>
+                    }
+                </section>
+            </div>
+
+            @if (_lastReport is not null)
+            {
+                <RailwayTrackVisualizer Diagnostics="_lastReport.Diagnostics"
+                                        OnStepSelected="step => _selectedStep = step" />
+
+                @if (_selectedStep is not null)
+                {
+                    <div class="step-inspector-bar">
+                        <strong>Selected Stage Inspector:</strong> @_selectedStep.StepName —
+                        Status: <code>@_selectedStep.Status</code> — @_selectedStep.DetailMessage
+                        (@(_selectedStep.DurationMs)ms)
+                    </div>
+                }
+            }
+        }
+
+        <!-- TAB 2: BFS GRAPH & MEMOIZATION LAB (L8) -->
+        @if (_activeTab == "bfs")
+        {
+            <div class="workspace-grid">
+                <section class="panel-card">
+                    <span class="eyebrow">LECTURE L8_1 — KEVIN BACON BFS + CONCURRENT LAZY MEMOIZATION</span>
+                    <h2>Degrees of Separation &amp; Thread-Safe Cache Telemetry</h2>
+                    <p class="panel-desc">
+                        Solves shortest-hop station paths via Breadth-First Search wrapped in
+                        <code>ConcurrentDictionary&lt;(string, string), Lazy&lt;Maybe&lt;BfsPathResult&gt;&gt;&gt;</code>.
+                    </p>
+
+                    <div class="button-row">
+                        <button class="btn-primary" @onclick="RunBurstMemoizationTest">
+                            ⚡ Run 50x Repeated BFS Burst (Prove O(1) Cache Hits)
+                        </button>
+                        <button class="btn-secondary" @onclick="ClearBfsCache">
+                            🗑 Clear Memoization Cache
+                        </button>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(_burstMessage))
+                    {
+                        <div class="burst-feedback">@_burstMessage</div>
+                    }
+
+                    <div class="bfs-chain-box">
+                        <h3>European High-Speed Adjacency Corridors (@RoutePlanner.GraphEngine.Edges.Count edges)</h3>
+                        <div class="edges-table-wrap">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>From</th>
+                                        <th>To</th>
+                                        <th>Corridor Line</th>
+                                        <th>Distance</th>
+                                        <th>Base Time</th>
+                                        <th>Roadworks</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var edge in RoutePlanner.GraphEngine.Edges)
+                                    {
+                                        var hasRw = ChaosController.HasRoadworksAt(edge.FromStation) || ChaosController.HasRoadworksAt(edge.ToStation);
+                                        <tr>
+                                            <td><strong>@edge.FromStation</strong></td>
+                                            <td><strong>@edge.ToStation</strong></td>
+                                            <td>@edge.LineName</td>
+                                            <td>@edge.DistanceKm km</td>
+                                            <td>@edge.Minutes min</td>
+                                            <td>
+                                                @if (hasRw)
+                                                {
+                                                    <span class="status-pill warn">1.10x Maintenance</span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="status-pill ok">Clear</span>
+                                                }
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="panel-card">
+                    <span class="eyebrow">MEMOIZATION TELEMETRY INSPECTOR</span>
+                    <h2>Cache Hit / Miss Analytics</h2>
+                    <div class="cache-stats-panel">
+                        <div class="stat-row">
+                            <span>Cache Hits (<code>Lazy&lt;T&gt;.Value</code> reused):</span>
+                            <strong>@CacheStats.CacheHits</strong>
+                        </div>
+                        <div class="stat-row">
+                            <span>Cache Misses (BFS Graph Traversal executed):</span>
+                            <strong>@CacheStats.CacheMisses</strong>
+                        </div>
+                        <div class="stat-row">
+                            <span>Distinct Route Pairs Cached:</span>
+                            <strong>@CacheStats.CachedEntries</strong>
+                        </div>
+                        <div class="stat-row">
+                            <span>Hit Ratio Percentage:</span>
+                            <strong>@CacheStats.HitRatio.ToString("F1")%</strong>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        }
+
+        <!-- TAB 3: TRAMPOLINE SIMULATION & CURRIED CSV LAB (L7) -->
+        @if (_activeTab == "trampoline")
+        {
+            <div class="workspace-grid">
+                <section class="panel-card">
+                    <span class="eyebrow">LECTURE L7_1 — INDEFINITE LOOPS &amp; TRAMPOLINING (<code>IterateUntil</code>)</span>
+                    <h2>Stack-Safe Transit Telemetry Simulator</h2>
+                    <p class="panel-desc">
+                        Simulates step-by-step train progression with Express Green Waves ("Ladders") and
+                        Track Caution Zones ("Snakes") using immutable <code>record with</code> transitions and
+                        <code>IterateStepsUntil</code> without recursive stack frame overflow.
+                    </p>
+
+                    <div class="button-row">
+                        <button class="btn-primary" @onclick="RunTrampolineSimulation">
+                            ▶ Run Indefinite Loop Simulation (@_originInput → @_destinationInput)
+                        </button>
+                    </div>
+
+                    <div class="edges-table-wrap" style="margin-top:1rem;">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Step</th>
+                                    <th>Station</th>
+                                    <th>Progress</th>
+                                    <th>Elapsed</th>
+                                    <th>Telemetry Event</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var step in _simulationSteps)
+                                {
+                                    <tr>
+                                        <td>#@step.StepIndex</td>
+                                        <td><strong>@step.CurrentStation</strong></td>
+                                        <td>@step.ProgressKm / @step.TotalDistanceKm km</td>
+                                        <td>@step.AccumulatedMinutes min</td>
+                                        <td>@step.LastEventDescription</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <section class="panel-card">
+                    <span class="eyebrow">LECTURE L7_1 — CURRYING &amp; PARTIAL APPLICATION</span>
+                    <h2>Partially Applied CSV Parser Playground</h2>
+                    <p class="panel-desc">
+                        Uses <code>RawCsvParser.Partial("\n", ",", true)</code> to parse custom station tariff rows into
+                        <code>ImmutableList&lt;ImmutableList&lt;string&gt;&gt;</code>.
+                    </p>
+
+                    <textarea class="input-control code-textarea" rows="5" @bind="_customCsvInput"></textarea>
+                    <div class="button-row">
+                        <button class="btn-secondary" @onclick="ParseCustomCsv">Parse with Partial Function</button>
+                    </div>
+
+                    <div class="edges-table-wrap" style="margin-top:0.75rem;">
+                        <table class="data-table">
+                            <tbody>
+                                @foreach (var row in _parsedCsvRows)
+                                {
+                                    <tr>
+                                        @foreach (var cell in row)
+                                        {
+                                            <td><code>@cell</code></td>
+                                        }
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+        }
+
+        <!-- TAB 4: LIVE BENCHMARKS & COMBINATORS (L4 & L9) -->
+        @if (_activeTab == "benchmarks")
+        {
+            <section class="panel-card">
+                <div class="railway-header">
+                    <div>
+                        <span class="eyebrow">LECTURES L4_1 &amp; L9_1 — PRACTICAL FUNCTIONAL C# BENCHMARKS</span>
+                        <h2>Imperative vs. LINQ vs. Fork Combinator vs. Trampoline vs. Custom IEnumerable</h2>
+                    </div>
+                    <button class="btn-primary" @onclick="RunLiveBenchmarks">
+                        ⚡ Re-Run 25,000-Signal Elevation Benchmark
+                    </button>
+                </div>
+
+                <div class="edges-table-wrap" style="margin-top:1rem;">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Approach (L9_1)</th>
+                                <th>Category</th>
+                                <th>Computed Output</th>
+                                <th>Avg Time (μs)</th>
+                                <th>Relative Ratio</th>
+                                <th>Architectural Takeaway</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var b in _benchmarkEntries)
+                            {
+                                <tr>
+                                    <td><strong>@b.ApproachName</strong></td>
+                                    <td><span class="status-pill ok">@b.Category</span></td>
+                                    <td><code>@b.ComputedValue.Value</code></td>
+                                    <td><strong>@b.ElapsedMicroseconds μs</strong></td>
+                                    <td>@(b.RelativeRatio)x</td>
+                                    <td>@b.ArchitecturalNote</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        }
+
+        <!-- TAB 5: RBAC CHAOS & SIGNALR CONSOLE (CRITERIA 9 & 10) -->
+        @if (_activeTab == "chaos")
+        {
+            <div class="workspace-grid">
+                <section class="panel-card">
+                    <span class="eyebrow">CRITERION 9 &amp; 10 — RBAC SECURITY &amp; CHAOS FAULT INJECTION</span>
+                    <h2>Dispatcher Engineering &amp; Fault Resilience Controls</h2>
+
+                    @if (AppState.CurrentRole != UserRole.DispatcherAdmin)
+                    {
+                        <div class="default-alert-box nothing-box">
+                            <h4>🔒 Restricted by Role-Based Access Control (RBAC)</h4>
+                            <p>You are currently viewing as <strong>Passenger</strong>. Switch to <strong>Dispatcher Admin</strong> in the top bar to toggle station roadworks or inject simulated service faults.</p>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="chaos-section">
+                            <h3>1. Toggle Active Station Roadworks (1.10x Dynamic Multiplier — Lecture L6_1)</h3>
+                            <div class="station-toggle-grid">
+                                @foreach (var st in MappingSystem.GetAllStations())
+                                {
+                                    var active = ChaosController.HasRoadworksAt(st.StationCode);
+                                    <button class="station-toggle-btn @(active ? "active-rw" : "")"
+                                            @onclick="() => ToggleStationRoadworks(st.StationCode)">
+                                        @(active ? "🚧 " : "✓ ") @st.StationCode
+                                    </button>
+                                }
+                            </div>
+
+                            <h3 style="margin-top:1.5rem;">2. Inject Unhandled Exceptions into Monad Pipeline Stages</h3>
+                            <div class="fault-toggles">
+                                <label class="checkbox-row">
+                                    <input type="checkbox" @bind="ChaosController.SimulateMappingServiceCrash" />
+                                    <span>Crash Stage 1: <code>IMappingSystem.FindLocation</code> → returns <code>UnhandledError&lt;GeoCoord&gt;</code></span>
+                                </label>
+                                <label class="checkbox-row">
+                                    <input type="checkbox" @bind="ChaosController.SimulateRoutePlannerCrash" />
+                                    <span>Crash Stage 2: <code>IRoutePlanner.PlanRoute</code> → returns <code>UnhandledError&lt;PlannedRoute&gt;</code></span>
+                                </label>
+                                <label class="checkbox-row">
+                                    <input type="checkbox" @bind="ChaosController.SimulateTrafficMonitorCrash" />
+                                    <span>Crash Stage 3: <code>ITrafficMonitor.CheckForRoadworks</code> → returns <code>UnhandledError&lt;RouteWithTraffic&gt;</code></span>
+                                </label>
+                                <label class="checkbox-row">
+                                    <input type="checkbox" @bind="ChaosController.SimulatePricingCrash" />
+                                    <span>Crash Stage 4: <code>IPricingCalculator.CalculatePrice</code> → returns <code>UnhandledError&lt;PricedItinerary&gt;</code></span>
+                                </label>
+                            </div>
+                        </div>
+                    }
+                </section>
+
+                <section class="panel-card">
+                    <span class="eyebrow">REAL-TIME SIGNALR TELEMETRY STREAM</span>
+                    <h2>Live Traffic &amp; Audit Broadcast Log</h2>
+                    <ul class="signalr-feed">
+                        @foreach (var msg in AppState.LiveSignalRFeed)
+                        {
+                            <li>@msg</li>
+                        }
+                    </ul>
+                </section>
+            </div>
+        }
+    </div>
+</CascadingValue>
+
+@code {
+    private string _activeTab = "planner";
+    private string _originInput = "LONDON";
+    private string _destinationInput = "ZURICH";
+    private int _passengersInput = 2;
+    private string _offeringKey = "HolidayWithMeals";
+    private string? _validationWarning;
+
+    private PipelineExecutionReport? _lastReport;
+    private PipelineStepDiagnostic? _selectedStep;
+    private string? _burstMessage;
+
+    private ImmutableList<TransitSimulationState> _simulationSteps = ImmutableList<TransitSimulationState>.Empty;
+    private ImmutableList<BenchmarkEntry> _benchmarkEntries = ImmutableList<BenchmarkEntry>.Empty;
+
+    private string _customCsvInput = "STATION,ZONE,BASE_EUR\nLONDON,ZONE_1,42.50\nPARIS,ZONE_1,38.00\nZURICH,ALPINE,64.00";
+    private ImmutableList<ImmutableList<string>> _parsedCsvRows = ImmutableList<ImmutableList<string>>.Empty;
+
+    private MemoizationStats CacheStats => RoutePlanner.GraphEngine.GetCacheStats();
+
+    protected override void OnInitialized()
+    {
+        AppState.OnStateChanged += HandleStateChanged;
+        ChaosController.OnTrafficAlertBroadcast += HandleTrafficAlert;
+
+        SyncInputsFromSnapshot(AppState.CurrentSnapshot);
+        ExecutePlannerPipelineInternal(commitHistory: false);
+        RunTrampolineSimulation();
+        ParseCustomCsv();
+        _benchmarkEntries = BenchmarkAndLoopLab.RunElevationTelemetryBenchmark(25_000);
+    }
+
+    private void HandleStateChanged() => InvokeAsync(StateHasChanged);
+
+    private void HandleTrafficAlert(string alert)
+    {
+        AppState.AppendFeedMessage(alert);
+        InvokeAsync(StateHasChanged);
+    }
+
+    private CustomerOffering ResolveSelectedOffering() => _offeringKey switch
+    {
+        "DayTripSingle" => new StandardDayTrip("Standard Direct Ticket", "Point-to-point single rail fare", false),
+        "DayTripReturn" => new StandardDayTrip("Standard Open Return", "Includes discounted return leg (+65%)", true),
+        "HolidayComfort" => new RailHoliday("European City Break", "3 Nights 4-Star Hotel + Rail Pass", new intHotelNights(3), "Comfort 4-Star"),
+        "HolidayLuxury" => new RailHoliday("Grand European Luxury Tour", "5 Nights 5-Star Palace Hotel + Rail Pass", new intHotelNights(5), "Luxury 5-Star"),
+        _ => new RailHolidayWithMeals("Alpine Gourmet & Lounge Package", "4 Nights + First Class Dining & Lounge", new intHotelNights(4), "Alpine Boutique", "Full Gourmet Board", true)
+    };
+
+    private void ExecutePlannerPipeline()
+    {
+        ExecutePlannerPipelineInternal(commitHistory: true);
+    }
+
+    private void ExecutePlannerPipelineInternal(bool commitHistory)
+    {
+        _validationWarning = null;
+        var offering = ResolveSelectedOffering();
+        var validation = RailwayPipelineOrchestrator.ValidateInput(_originInput, _destinationInput, _passengersInput, offering);
+
+        switch (validation)
+        {
+            case EmptyRouteQuery { FieldName: var f }:
+                _validationWarning = $"Missing required field: {f}";
+                break;
+            case SameStationError { Station: var s }:
+                _validationWarning = $"Origin and destination are both '{s}' (0 hops).";
+                break;
+            case InvalidPassengerCount { AttemptedCount: var c }:
+                _validationWarning = $"Passenger count ({c}) must be between 1 and 50.";
+                break;
+        }
+
+        if (commitHistory)
+        {
+            AppState.CommitSnapshot(new PlannerFormSnapshot(
+                _originInput, _destinationInput, _passengersInput, _offeringKey, DateTime.UtcNow));
+        }
+
+        _lastReport = Orchestrator.ExecutePipeline(_originInput, _destinationInput, offering, _passengersInput);
+        _selectedStep = _lastReport.Diagnostics.LastOrDefault();
+    }
+
+    private void TriggerNothingDemo()
+    {
+        _originInput = "LONDON";
+        _destinationInput = "ATLANTIS";
+        ExecutePlannerPipelineInternal(commitHistory: true);
+    }
+
+    private void TriggerErrorDemo()
+    {
+        ChaosController.SimulateTrafficMonitorCrash = true;
+        ExecutePlannerPipelineInternal(commitHistory: false);
+        AppState.AppendFeedMessage("[Chaos Fault Injector] Injected UnhandledError<RouteWithTraffic> into ITrafficMonitor.");
+    }
+
+    private void ResetChaosAndReExecute()
+    {
+        ChaosController.SimulateMappingServiceCrash = false;
+        ChaosController.SimulateRoutePlannerCrash = false;
+        ChaosController.SimulateTrafficMonitorCrash = false;
+        ChaosController.SimulatePricingCrash = false;
+        ExecutePlannerPipelineInternal(commitHistory: false);
+    }
+
+    private void RestoreValidStations()
+    {
+        _originInput = "LONDON";
+        _destinationInput = "ZURICH";
+        ResetChaosAndReExecute();
+    }
+
+    private void HandleUndo()
+    {
+        AppState.Undo();
+        SyncInputsFromSnapshot(AppState.CurrentSnapshot);
+        ExecutePlannerPipelineInternal(commitHistory: false);
+    }
+
+    private void HandleRedo()
+    {
+        AppState.Redo();
+        SyncInputsFromSnapshot(AppState.CurrentSnapshot);
+        ExecutePlannerPipelineInternal(commitHistory: false);
+    }
+
+    private void SyncInputsFromSnapshot(PlannerFormSnapshot snap)
+    {
+        _originInput = snap.Origin;
+        _destinationInput = snap.Destination;
+        _passengersInput = snap.Passengers;
+        _offeringKey = snap.OfferingKey;
+    }
+
+    private void SwitchRole(UserRole role) => AppState.SetRole(role);
+
+    private void ToggleStationRoadworks(string stationCode)
+    {
+        ChaosController.ToggleRoadworks(stationCode, AppState.CurrentRole.ToString());
+        ExecutePlannerPipelineInternal(commitHistory: false);
+    }
+
+    private void RunBurstMemoizationTest()
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < 50; i++)
+        {
+            RoutePlanner.GraphEngine.FindShortestPathMemoized(_originInput, _destinationInput);
+        }
+        sw.Stop();
+        _burstMessage = $"Executed 50 BFS queries for {_originInput} → {_destinationInput} in {sw.Elapsed.TotalMilliseconds:F3} ms! Cache Hit Ratio is now {CacheStats.HitRatio:F1}%.";
+    }
+
+    private void ClearBfsCache()
+    {
+        RoutePlanner.GraphEngine.ClearCache();
+        _burstMessage = "Memoization cache cleared.";
+    }
+
+    private void RunTrampolineSimulation()
+    {
+        if (_lastReport?.Outcome is Something<PricedItinerary> { InnerValue: var it })
+        {
+            _simulationSteps = BenchmarkAndLoopLab.RunTransitSimulation(it.TrafficRoute.Route);
+        }
+        else
+        {
+            var fallbackRoute = new PlannedRoute(
+                "LONDON", "ZURICH",
+                ImmutableList.Create(new RouteSegment("LONDON", "PARIS", 460, 135, "Eurostar"), new RouteSegment("PARIS", "ZURICH", 490, 240, "TGV Lyria")),
+                950, 375);
+            _simulationSteps = BenchmarkAndLoopLab.RunTransitSimulation(fallbackRoute);
+        }
+    }
+
+    private void ParseCustomCsv()
+    {
+        _parsedCsvRows = BenchmarkAndLoopLab.StandardCsvParser(_customCsvInput);
+    }
+
+    private void RunLiveBenchmarks()
+    {
+        _benchmarkEntries = BenchmarkAndLoopLab.RunElevationTelemetryBenchmark(25_000);
+    }
+
+    private string GetCurrentMonadBadge() => _lastReport?.Outcome switch
+    {
+        Something<PricedItinerary> => "Something<T>",
+        Error<PricedItinerary> => "Error<T>",
+        Nothing<PricedItinerary> => "Nothing<T>",
+        _ => "Idle"
+    };
+
+    public void Dispose()
+    {
+        AppState.OnStateChanged -= HandleStateChanged;
+        ChaosController.OnTrafficAlertBroadcast -= HandleTrafficAlert;
+    }
+}

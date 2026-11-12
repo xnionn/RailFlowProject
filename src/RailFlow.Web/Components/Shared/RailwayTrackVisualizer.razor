@@ -1,0 +1,46 @@
+<div class="railway-visualizer-card">
+    <div class="railway-header">
+        <div>
+            <span class="eyebrow">LECTURE L6_1 — RAILWAY-ORIENTED PROGRAMMING</span>
+            <h3>Live Monad Pipeline Track (<code>Bind</code> &amp; <code>Map</code> Flow)</h3>
+        </div>
+        <div class="track-legend">
+            <span class="legend-item"><span class="legend-dot something"></span> Upper Track (<code>Something&lt;T&gt;</code>)</span>
+            <span class="legend-item"><span class="legend-dot nothing"></span> Bypass Track (<code>Nothing&lt;T&gt;</code>)</span>
+            <span class="legend-item"><span class="legend-dot error"></span> Fault Track (<code>Error&lt;T&gt;</code>)</span>
+        </div>
+    </div>
+
+    <div class="railway-stages-grid">
+        @foreach (var step in Diagnostics)
+        {
+            var cssClass = step.Status.ToLowerInvariant();
+            <button type="button"
+                    class="railway-stage-node status-@cssClass"
+                    @onclick="() => OnStepSelected.InvokeAsync(step)"
+                    title="Click to inspect monad step details">
+                <div class="stage-top-row">
+                    <span class="stage-name">@step.StepName</span>
+                    <span class="stage-time">@(step.DurationMs)ms</span>
+                </div>
+                <div class="rails-diagram">
+                    <div class="rail-line upper-rail @(step.Status == "Something" ? "active-rail" : "inactive-rail")">
+                        <span>✓ Something&lt;T&gt;</span>
+                    </div>
+                    <div class="rail-line lower-rail @(step.Status is "Nothing" or "Error" or "Skipped" ? "active-bypass-" + cssClass : "inactive-rail")">
+                        <span>↳ @step.Status</span>
+                    </div>
+                </div>
+                <p class="stage-detail">@step.DetailMessage</p>
+            </button>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public ImmutableList<PipelineStepDiagnostic> Diagnostics { get; set; } = ImmutableList<PipelineStepDiagnostic>.Empty;
+
+    [Parameter]
+    public EventCallback<PipelineStepDiagnostic> OnStepSelected { get; set; }
+}
