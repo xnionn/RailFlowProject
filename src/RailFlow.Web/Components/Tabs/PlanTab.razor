@@ -1,13 +1,8 @@
-@* "Plan a trip" tab: the trip form and the priced result. It only displays things and reports what the
-   user asked for; the search itself (validation, the pipeline, Undo/Redo history) stays in Home because the
-   result is shared with the Bookings and Timetable tabs. It receives the form model (Inputs, bound directly
-   by the inputs), the last report and its passenger count, the validation message, the selected pipeline
-   step (two-way), whether Undo/Redo are possible, and one EventCallback per user action. The cascaded role
-   only decides whether the "service failure" shortcut is shown (Home checks the role again before it
-   simulates anything); the cascaded ViewOptions decide whether course material is shown. *@
+@* Plan a trip: the form and the priced result. Only displays and reports clicks; Home runs the search,
+   because the result is shared with the Bookings and Timetable tabs. *@
 
 @inject IMappingSystem MappingSystem
-@inject ChaosAndTrafficController ChaosController
+@inject OperationsControls Operations
 
 @if (FailuresSimulated)
 {
@@ -50,6 +45,10 @@
 
         <div class="form-grid" style="margin-top:0.75rem;">
             <div class="field">
+                <label for="travelDate">Date</label>
+                <input id="travelDate" type="date" min="@DateTime.Today.ToString("yyyy-MM-dd")" @bind="Inputs.TravelDate" />
+            </div>
+            <div class="field">
                 <label for="departure">Departure</label>
                 <input id="departure" type="time" @bind="Inputs.Departure" />
             </div>
@@ -83,7 +82,7 @@
             <p class="muted small" style="margin:0.6rem 0 0;">
                 Try an edge case:
                 <button class="btn-link" @onclick="() => OnUnknownStationDemo.InvokeAsync()">unknown station</button>
-                @if (Role == UserRole.DispatcherAdmin)
+                @if (Role == UserRole.Dispatcher)
                 {
                     <text> · </text>
                     <button class="btn-link" @onclick="() => OnServiceFailureDemo.InvokeAsync()">service failure</button>
@@ -129,7 +128,7 @@
                     </p>
 
                     <div class="trip-times">
-                        <div><span class="muted small">Departs</span><strong>@Inputs.Departure.ToString("HH:mm")</strong></div>
+                        <div><span class="muted small">Departs</span><strong>@Inputs.TravelDate.ToString("ddd d MMM"), @Inputs.Departure.ToString("HH:mm")</strong></div>
                         <div>
                             <span class="muted small">Arrives</span>
                             <strong>@arrivalStop.Arrival.ToString("HH:mm")@(arrivalStop.DayOffset > 0 ? $" +{arrivalStop.DayOffset}d" : "")</strong>
@@ -144,7 +143,7 @@
                         </div>
                     </div>
 
-                    @if (trip.TrafficRoute.HasRoadworksOrTrackMaintenance)
+                    @if (trip.TrafficRoute.HasEngineeringWorks)
                     {
                         <div class="alert warn">@trip.TrafficRoute.TrafficAdvisory</div>
                     }
@@ -162,9 +161,9 @@
                     <table class="breakdown">
                         <tbody>
                             <tr><td>Rail fare</td><td>@UiText.Money(trip.BaseFare, trip.Currency)</td></tr>
-                            @if (trip.RoadworksSurcharge > 0)
+                            @if (trip.EngineeringWorksSurcharge > 0)
                             {
-                                <tr><td>Engineering works surcharge</td><td>+@UiText.Money(trip.RoadworksSurcharge, trip.Currency)</td></tr>
+                                <tr><td>Engineering works surcharge</td><td>+@UiText.Money(trip.EngineeringWorksSurcharge, trip.Currency)</td></tr>
                             }
                             @if (trip.OfferingAddon > 0)
                             {
@@ -183,7 +182,7 @@
                 <NothingTemplate>
                     <div class="alert warn">
                         <strong>No route found</strong>
-                        <p>"@Inputs.OriginName" or "@Inputs.DestinationName" is not a station in our network. Pick a station from the list.</p>
+                        <p>"@UiText.Station(SearchedFrom ?? Inputs.Origin)" or "@UiText.Station(SearchedTo ?? Inputs.Destination)" is not a station in our network. Pick a station from the list.</p>
                         <div class="actions">
                             <button class="btn btn-sm" @onclick="() => OnRestoreValidStations.InvokeAsync()">Search London → Zurich instead</button>
                         </div>
@@ -213,9 +212,31 @@
             <p class="step-detail-panel"><strong>@SelectedStep.StepName:</strong> @SelectedStep.DetailMessage</p>
         }
 
+        @if (Report.Outcome is Something<PricedItinerary> { InnerValue: var priced })
+        {
+            <h3 class="small-heading">Fare calculation</h3>
+            <ul class="plain-list small">
+                @foreach (var line in priced.PipelineAuditLog)
+                {
+                    <li>@line</li>
+                }
+            </ul>
+        }
+
+        @if (Report.SideEffectLogs.Count > 0)
+        {
+            <h3 class="small-heading">Log</h3>
+            <ul class="plain-list small">
+                @foreach (var line in Report.SideEffectLogs)
+                {
+                    <li><code>@line</code></li>
+                }
+            </ul>
+        }
+
         <HowItWorks>
             The four services are chained with <code>Bind</code>:
-            <code>FindLocation → PlanRoute → CheckForRoadworks → CalculatePrice</code>. Each returns
+            <code>FindLocation → PlanRoute → CheckEngineeringWorks → CalculatePrice</code>. Each returns
             <code>Maybe&lt;T&gt;</code>. When one returns <code>Nothing</code> or <code>Error</code>, the later steps are
             skipped instead of throwing, and <code>OnNothing</code> / <code>OnError</code> log the problem once.
             The result card is the generic <code>MaybeView&lt;T&gt;</code> component with one template per case.
@@ -231,6 +252,13 @@
     /// <summary>The last search, or null when the form did not pass validation.</summary>
     [Parameter]
     public PipelineExecutionReport? Report { get; set; }
+
+    /// <summary>Stations of the last search (the form may have been edited since).</summary>
+    [Parameter]
+    public string? SearchedFrom { get; set; }
+
+    [Parameter]
+    public string? SearchedTo { get; set; }
 
     /// <summary>Passenger count the shown price was calculated for (the input may have changed since).</summary>
     [Parameter]
@@ -293,7 +321,7 @@
     private IReadOnlyList<GeoCoord>? _stations;
 
     private bool FailuresSimulated =>
-        ChaosController.SimulateMappingServiceCrash || ChaosController.SimulateRoutePlannerCrash ||
-        ChaosController.SimulateTrafficMonitorCrash || ChaosController.SimulatePricingCrash ||
-        ChaosController.SimulatePaymentOutage;
+        Operations.SimulateMappingServiceCrash || Operations.SimulateRoutePlannerCrash ||
+        Operations.SimulateTrafficMonitorCrash || Operations.SimulatePricingCrash ||
+        Operations.SimulatePaymentOutage;
 }

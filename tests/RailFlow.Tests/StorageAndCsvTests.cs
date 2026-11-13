@@ -120,7 +120,7 @@ public sealed class StorageAndCsvTests : IDisposable
             ["from,to,distance_km,minutes,line", "ASTANA,ALMATY,1210,840,Talgo", "ALMATY,SHYMKENT,690,600,Intercity"]);
 
         var dataset = Assert.IsType<Success<NetworkDataset>>(NetworkDataLoader.LoadFromDirectory(_directory)).Data;
-        var chaos = new ChaosAndTrafficController();
+        var chaos = new OperationsControls();
         var orchestrator = new RailwayPipelineOrchestrator(
             new RailMappingSystem(chaos, dataset),
             new RailRoutePlanner(chaos, dataset),
@@ -147,7 +147,7 @@ public sealed class StorageAndCsvTests : IDisposable
     [Fact]
     public void EndToEnd_PriceBookAndStore_ThenReadBackThroughTheOtherFormat()
     {
-        var chaos = new ChaosAndTrafficController();
+        var chaos = new OperationsControls();
         var gateway = new SimulatedPaymentGateway(chaos);
         var journalFor = BookingJournalFactory.ForDirectory(_directory);
 

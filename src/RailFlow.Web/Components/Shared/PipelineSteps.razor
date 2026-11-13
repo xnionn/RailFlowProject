@@ -31,11 +31,12 @@
     [Parameter]
     public EventCallback<PipelineStepDiagnostic> OnStepSelected { get; set; }
 
-    private static (string Tone, string Label) Describe(string status) => status switch
+    private static (string Tone, string Label) Describe(StepStatus status) => status switch
     {
-        "Something" => ("ok", "Done"),
-        "Nothing" => ("warn", "No result"),
-        "Error" => ("err", "Failed"),
-        _ => ("", "Skipped")
+        StepStatus.Something => ("ok", "Done"),
+        StepStatus.Nothing => ("warn", "No result"),
+        StepStatus.Error => ("err", "Failed"),
+        StepStatus.Skipped => ("", "Skipped"),
+        _ => throw new ArgumentOutOfRangeException(nameof(status), status, null)
     };
 }

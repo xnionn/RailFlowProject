@@ -37,25 +37,29 @@ public static class TicketExportFactory
         _ => throw new ArgumentOutOfRangeException(nameof(format), format, "Unsupported ticket format.")
     };
 
+    // The text ticket is for people, so it uses station names and grouped amounts like the app;
+    // CSV and JSON keep the station codes and plain numbers that other programs expect.
     private static string ToPlainText(BookingReceipt r) =>
         new StringBuilder()
             .AppendLine("RAILFLOW E-TICKET")
             .AppendLine($"Booking      {r.BookingId}")
-            .AppendLine($"Passenger    {r.PassengerName} ({r.Passengers} pax)")
-            .AppendLine($"Route        {r.Origin} -> {r.Destination}")
+            .AppendLine($"Passenger    {r.PassengerName} ({r.Passengers} {(r.Passengers == 1 ? "passenger" : "passengers")})")
+            .AppendLine($"Route        {StationNames.Display(r.Origin)} → {StationNames.Display(r.Destination)}")
+            .AppendLine($"Travel date  {(r.TravelDate is { } day ? day.ToString("ddd d MMM yyyy", CultureInfo.InvariantCulture) : "open")}")
             .AppendLine($"Package      {r.OfferingTitle}")
-            .AppendLine(FormattableString.Invariant($"Paid         {r.Currency}{r.AmountPaid:F2}"))
+            .AppendLine(FormattableString.Invariant($"Paid         {r.Currency}{r.AmountPaid:N2}"))
             .AppendLine($"Transaction  {r.TransactionId}")
             .Append($"Issued (UTC) {r.IssuedAtUtc.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)}")
             .ToString();
 
     private static string ToCsv(BookingReceipt r) =>
-        "booking_id,passenger,origin,destination,package,passengers,amount,currency,issued_utc\n" +
+        "booking_id,passenger,origin,destination,travel_date,package,passengers,amount,currency,issued_utc\n" +
         string.Join(',',
             r.BookingId,
             Quote(r.PassengerName),
             r.Origin,
             r.Destination,
+            r.TravelDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "",
             Quote(r.OfferingTitle),
             r.Passengers.ToString(CultureInfo.InvariantCulture),
             r.AmountPaid.ToString("F2", CultureInfo.InvariantCulture),

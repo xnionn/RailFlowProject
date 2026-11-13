@@ -21,7 +21,7 @@
                 <div class="alert err" role="alert">
                     <strong>The request could not be completed</strong>
                     <p>@ex.Message</p>
-                    @if (ActiveRole == UserRole.DispatcherAdmin && OnRetry.HasDelegate)
+                    @if (ActiveRole == UserRole.Dispatcher && OnRetry.HasDelegate)
                     {
                         <div class="actions">
                             <button class="btn btn-sm" @onclick="() => OnRetry.InvokeAsync()">Clear simulated failures and retry</button>

@@ -24,7 +24,11 @@ public sealed class RailFlowWebFactory : WebApplicationFactory<Program>
     {
         builder.UseEnvironment("Development");
         builder.UseSetting("Storage:BookingDirectory", BookingDirectory);
+        builder.UseSetting("Security:LoginAttemptsPerMinute", LoginAttemptsPerMinute.ToString());
     }
+
+    /// <summary>High by default so the sign-in tests are not throttled; the rate-limit test sets its own value.</summary>
+    public int LoginAttemptsPerMinute { get; init; } = 1000;
 
     /// <summary>A client that keeps cookies but does not follow redirects, so tests can look at the Location header.</summary>
     public HttpClient CreateBrowserClient() =>
@@ -116,6 +120,21 @@ public sealed class WebApiIntegrationTests(RailFlowWebFactory factory) : IClassF
         Assert.Contains("RailFlow", await response.Content.ReadAsStringAsync());
     }
 
+    // The open tab is part of the address, so a link or a reload opens the same tab.
+    [Theory]
+    [InlineData("/?tab=timetable", "timetable")]
+    [InlineData("/?tab=bookings", "bookings")]
+    [InlineData("/", "plan")]
+    [InlineData("/?tab=dispatcher", "plan")]   // not offered to a guest
+    [InlineData("/?tab=nonsense", "plan")]
+    public async Task HomePage_OpensTheTabNamedInTheAddress(string url, string expectedTab)
+    {
+        var html = await factory.CreateClient().GetStringAsync(url);
+
+        Assert.Matches($"id=\"tab-{expectedTab}\"[^>]*aria-selected=\"true\"", html);
+        Assert.Contains($"aria-labelledby=\"tab-{expectedTab}\"", html);
+    }
+
     [Fact]
     public async Task LoginPage_IsServed_WithAntiforgeryTokenAndFormName()
     {
@@ -155,15 +174,74 @@ public sealed class WebApiIntegrationTests(RailFlowWebFactory factory) : IClassF
     }
 
     [Fact]
-    public async Task RouteQuote_StationCodesAreCaseInsensitive_AndBadPassengerCountFallsBackToOne()
+    public async Task RouteQuote_StationCodesAreCaseInsensitive()
     {
         var client = factory.CreateClient();
 
-        var single = await client.GetFromJsonAsync<JsonElement>("/api/route-quote?from=LONDON&to=PARIS&passengers=1");
-        var lowerCase = await client.GetFromJsonAsync<JsonElement>("/api/route-quote?from=london&to=paris&passengers=-5");
+        var upper = await client.GetFromJsonAsync<JsonElement>("/api/route-quote?from=LONDON&to=PARIS&passengers=1");
+        var lower = await client.GetFromJsonAsync<JsonElement>("/api/route-quote?from=london&to=paris&passengers=1");
 
-        Assert.Equal("LONDON", lowerCase.GetProperty("origin").GetString());
-        Assert.Equal(single.GetProperty("finalPrice").GetDecimal(), lowerCase.GetProperty("finalPrice").GetDecimal());
+        Assert.Equal("LONDON", lower.GetProperty("origin").GetString());
+        Assert.Equal(upper.GetProperty("finalPrice").GetDecimal(), lower.GetProperty("finalPrice").GetDecimal());
+    }
+
+    // The API uses the same validation gate as the planner form, so it refuses what the form refuses.
+    [Theory]
+    [InlineData("from=LONDON&to=PARIS&passengers=0", "passengers")]
+    [InlineData("from=LONDON&to=PARIS&passengers=-5", "passengers")]
+    [InlineData("from=LONDON&to=PARIS&passengers=100000", "passengers")]
+    [InlineData("from=LONDON&to=london&passengers=1", "to")]
+    [InlineData("from=%20&to=PARIS&passengers=1", "from")]
+    public async Task RouteQuote_InvalidQuery_Is400WithTheFieldInError(string query, string field)
+    {
+        var response = await factory.CreateClient().GetAsync("/api/route-quote?" + query);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(problem.GetProperty("errors").TryGetProperty(field, out _));
+    }
+
+    [Theory]
+    [InlineData("/api/route-quote?from=LONDON&to=PARIS")]
+    [InlineData("/api/route-quote?from=LONDON&to=PARIS&passengers=abc")]
+    public async Task RouteQuote_MissingOrNonNumericParameter_IsProblemDetails(string url)
+    {
+        var response = await factory.CreateClient().GetAsync(url);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Fact]
+    public async Task UnknownPage_ShowsTheFriendlyNotFoundPage()
+    {
+        var response = await factory.CreateClient().GetAsync("/does-not-exist");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Contains("Page not found", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task UnknownApiPath_IsABare404()
+    {
+        var response = await factory.CreateClient().GetAsync("/api/does-not-exist");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.DoesNotContain("Page not found", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Login_TooManyAttemptsFromOneClient_Are429()
+    {
+        using var limited = new RailFlowWebFactory { LoginAttemptsPerMinute = 3 };
+        var client = limited.CreateBrowserClient();
+
+        var statuses = new List<HttpStatusCode>();
+        for (var i = 0; i < 4; i++)
+            statuses.Add((await SubmitLoginAsync(client, "passenger", "wrong-password")).StatusCode);
+
+        Assert.DoesNotContain(HttpStatusCode.TooManyRequests, statuses.Take(3));
+        Assert.Equal(HttpStatusCode.TooManyRequests, statuses[3]);
     }
 
     [Fact]
@@ -353,7 +431,7 @@ public sealed class WebApiIntegrationTests(RailFlowWebFactory factory) : IClassF
         Assert.Equal("text/plain", response.Content.Headers.ContentType?.MediaType);
         var text = await response.Content.ReadAsStringAsync();
         Assert.StartsWith("RAILFLOW E-TICKET", text);
-        Assert.Contains("LONDON -> PARIS", text);
+        Assert.Contains("London → Paris", text);
     }
 
     [Fact]

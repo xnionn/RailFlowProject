@@ -1,8 +1,4 @@
-@* E-ticket card of the Bookings tab: previews the selected booking in the chosen format and offers it as
-   a download. It receives the receipt to show (null shows "No booking selected.") and the ticket format as
-   a two-way parameter (Format / FormatChanged), so the choice is remembered by the caller. The download
-   link carries the file itself as a data: URI built here from that receipt, so no API call (and no
-   sign-in) is needed and only a booking the user may already see can be downloaded. *@
+@* E-ticket preview and download. The file is built in the page from the receipt, so no API call is needed. *@
 
 <section class="card">
     <div class="card-head">

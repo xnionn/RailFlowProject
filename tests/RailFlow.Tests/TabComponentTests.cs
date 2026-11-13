@@ -23,11 +23,11 @@ public sealed class TabComponentTests : BunitContext
 
     public TabComponentTests()
     {
-        Services.AddSingleton<ChaosAndTrafficController>();
+        Services.AddSingleton<OperationsControls>();
         Services.AddSingleton(EmbeddedNetwork.Dataset);
-        Services.AddSingleton(sp => new RailMappingSystem(sp.GetRequiredService<ChaosAndTrafficController>(), EmbeddedNetwork.Dataset));
+        Services.AddSingleton(sp => new RailMappingSystem(sp.GetRequiredService<OperationsControls>(), EmbeddedNetwork.Dataset));
         Services.AddSingleton<IMappingSystem>(sp => sp.GetRequiredService<RailMappingSystem>());
-        Services.AddSingleton(sp => new RailRoutePlanner(sp.GetRequiredService<ChaosAndTrafficController>(), EmbeddedNetwork.Dataset));
+        Services.AddSingleton(sp => new RailRoutePlanner(sp.GetRequiredService<OperationsControls>(), EmbeddedNetwork.Dataset));
         Services.AddSingleton<IRoutePlanner>(sp => sp.GetRequiredService<RailRoutePlanner>());
         Services.AddSingleton<ITrafficMonitor, RailTrafficMonitor>();
         Services.AddSingleton<IPricingCalculator, RailPricingCalculator>();
@@ -44,7 +44,7 @@ public sealed class TabComponentTests : BunitContext
             Directory.Delete(_bookingDirectory, recursive: true);
     }
 
-    private ChaosAndTrafficController Chaos => Services.GetRequiredService<ChaosAndTrafficController>();
+    private OperationsControls Operations => Services.GetRequiredService<OperationsControls>();
 
     // ----- BenchmarkCard -----
 
@@ -110,7 +110,7 @@ public sealed class TabComponentTests : BunitContext
 
         var cut = Render<DispatcherTab>(p => p
             .Add(c => c.Feed, ImmutableList<string>.Empty)
-            .AddCascadingValue(UserRole.DispatcherAdmin));
+            .AddCascadingValue(UserRole.Dispatcher));
 
         Assert.DoesNotContain("Dispatchers only", cut.Markup);
         Assert.Equal(stations, cut.FindAll(".check-grid input[type=checkbox]").Count);
@@ -122,41 +122,35 @@ public sealed class TabComponentTests : BunitContext
     [Fact]
     public async Task DispatcherTab_ToggleByAPassenger_ChangesNothingOnTheServer()
     {
-        var raised = 0;
         var broadcasts = new List<string>();
-        Chaos.OnTrafficAlertBroadcast += broadcasts.Add;
+        Operations.OnTrafficAlertBroadcast += broadcasts.Add;
 
         var cut = Render<DispatcherTab>(p => p
             .Add(c => c.Feed, ImmutableList<string>.Empty)
-            .Add(c => c.OnRoadworksChanged, () => raised++)
             .AddCascadingValue(UserRole.Passenger));
 
         // The checkboxes are not there for a passenger, so call the handler directly, as a forged event would.
-        await cut.InvokeAsync(() => cut.Instance.ToggleStationRoadworks("PARIS"));
+        await cut.InvokeAsync(() => cut.Instance.ToggleEngineeringWorks("PARIS"));
 
-        Assert.False(Chaos.HasRoadworksAt("PARIS"));
-        Assert.Equal(0, raised);
+        Assert.False(Operations.HasEngineeringWorksAt("PARIS"));
         Assert.Empty(broadcasts);
     }
 
     [Fact]
-    public void DispatcherTab_ToggleByADispatcher_StartsWorksAndRaisesTheCallback()
+    public void DispatcherTab_ToggleByADispatcher_StartsWorksAndTellsEveryone()
     {
-        var raised = 0;
         var broadcasts = new List<string>();
-        Chaos.OnTrafficAlertBroadcast += broadcasts.Add;
+        Operations.OnTrafficAlertBroadcast += broadcasts.Add;
 
         var cut = Render<DispatcherTab>(p => p
             .Add(c => c.Feed, ImmutableList<string>.Empty)
             .Add(c => c.SignedInName, "Dana")
-            .Add(c => c.OnRoadworksChanged, () => raised++)
-            .AddCascadingValue(UserRole.DispatcherAdmin));
+            .AddCascadingValue(UserRole.Dispatcher));
 
         cut.FindAll(".check-grid label.check").Single(l => l.TextContent.Trim() == "Paris")
             .QuerySelector("input")!.Change(true);
 
-        Assert.True(Chaos.HasRoadworksAt("PARIS"));
-        Assert.Equal(1, raised);
+        Assert.True(Operations.HasEngineeringWorksAt("PARIS"));
         Assert.Contains("Dispatcher Dana", Assert.Single(broadcasts));
     }
 
@@ -179,9 +173,9 @@ public sealed class TabComponentTests : BunitContext
     public void StageList_NumbersTheStagesAndColoursThemByStatus()
     {
         var cut = Render<StageList>(p => p.Add(c => c.Stages, ImmutableList.Create(
-            new StageView("Check details", "Done", "Ada, 2 passengers"),
-            new StageView("Take payment", "Failed", "Card declined."),
-            new StageView("Save booking", "Skipped", "Not run"))));
+            new StageView("Check details", StageStatus.Done, "Ada, 2 passengers"),
+            new StageView("Take payment", StageStatus.Failed, "Card declined."),
+            new StageView("Save booking", StageStatus.Skipped, "Not run"))));
 
         var rows = cut.FindAll("ol.steps.vertical li.step");
         Assert.Equal(3, rows.Count);
@@ -214,6 +208,25 @@ public sealed class TabComponentTests : BunitContext
     private PipelineExecutionReport PricedLondonParis() =>
         Services.GetRequiredService<RailwayPipelineOrchestrator>()
             .ExecutePipeline("LONDON", "PARIS", new StandardDayTrip("Single ticket", "One-way rail fare", false), 1);
+
+    [Fact]
+    public void BookingsTab_SignedInPassenger_SeesTheBookingsOfTheirAccount_InANewSession()
+    {
+        SeedJournal(
+            StoredReceipt("RF-MINE00001", "Ada Lovelace", 5) with { Owner = "passenger", TravelDate = new DateOnly(2026, 12, 24) },
+            StoredReceipt("RF-OTHER0001", "Grace Hopper", 3) with { Owner = "someone-else" });
+
+        // A fresh state, as after a reload: nothing was booked in this tab.
+        var cut = Render<BookingsTab>(p => p
+            .Add(c => c.State, new BookingsTabState())
+            .Add(c => c.Owner, "passenger")
+            .AddCascadingValue(UserRole.Passenger));
+
+        var row = Assert.Single(cut.FindAll("tbody tr"));
+        Assert.Contains("Ada Lovelace", row.TextContent);
+        Assert.Contains("24 Dec 2026", row.TextContent);
+        Assert.DoesNotContain("Grace Hopper", cut.Markup);
+    }
 
     [Fact]
     public void BookingsTab_Passenger_DoesNotSeeOtherPeoplesBookings_OrTheRevenueReport()
@@ -264,7 +277,7 @@ public sealed class TabComponentTests : BunitContext
 
         var cut = Render<BookingsTab>(p => p
             .Add(c => c.State, new BookingsTabState())
-            .AddCascadingValue(UserRole.DispatcherAdmin));
+            .AddCascadingValue(UserRole.Dispatcher));
 
         var rows = cut.FindAll("tbody tr");
         Assert.Contains("Grace Hopper", rows[0].TextContent);
@@ -310,13 +323,40 @@ public sealed class TabComponentTests : BunitContext
         Assert.DoesNotContain("Grace Hopper", cut.Markup);
     }
 
+    [Fact]
+    public void BookingsTab_SameSearchPricedAgain_StaysBooked_ButANewSearchCanBeBooked()
+    {
+        var state = new BookingsTabState();
+        var gateway = Services.GetRequiredService<SimulatedPaymentGateway>();
+
+        var cut = Render<BookingsTab>(p => p
+            .Add(c => c.State, state)
+            .Add(c => c.Report, PricedLondonParis())
+            .Add(c => c.PricedPassengers, 1)
+            .Add(c => c.SearchId, 7)
+            .Add(c => c.Origin, "LONDON")
+            .AddCascadingValue(UserRole.Passenger));
+
+        cut.Find("#passengerName").Change("Ada Lovelace");
+        cut.Find("#passengerEmail").Change("ada@example.com");
+        cut.FindAll("button").Single(b => b.TextContent == "Confirm and pay").Click();
+
+        // Engineering works changed somewhere: Home prices the same search again, which is a new report object.
+        cut.Render(p => p.Add(c => c.Report, PricedLondonParis()));
+        Assert.Contains(cut.FindAll("button"), b => b.TextContent == "Booked");
+        Assert.Equal(1, gateway.SuccessfulCharges);
+
+        cut.Render(p => p.Add(c => c.SearchId, 8));
+        Assert.Contains(cut.FindAll("button"), b => b.TextContent == "Confirm and pay");
+    }
+
     // ----- NetworkTab, TimetableTab and LabTab -----
 
     [Fact]
     public void NetworkTab_ListsEveryConnection_AndMarksTheOnesWithEngineeringWorks()
     {
         var edges = Services.GetRequiredService<RailRoutePlanner>().GraphEngine.Edges;
-        var withWorks = edges.Count(e => Chaos.HasRoadworksAt(e.FromStation) || Chaos.HasRoadworksAt(e.ToStation));
+        var withWorks = edges.Count(e => Operations.HasEngineeringWorksAt(e.FromStation) || Operations.HasEngineeringWorksAt(e.ToStation));
 
         var cut = Render<NetworkTab>();
 
@@ -444,5 +484,38 @@ public sealed class TabComponentTests : BunitContext
 
         cut.Find("#destination").Change("  zurich ");
         Assert.Equal("ZURICH", inputs.Destination);
+    }
+
+    [Fact]
+    public void BookingsTab_DamagedBookingFile_StopsBeforePayment()
+    {
+        Directory.CreateDirectory(_bookingDirectory);
+        File.WriteAllText(Path.Combine(_bookingDirectory, "bookings.json"), "{ not json");
+        var gateway = Services.GetRequiredService<SimulatedPaymentGateway>();
+
+        var cut = Render<BookingsTab>(p => p
+            .Add(c => c.State, new BookingsTabState())
+            .Add(c => c.Report, PricedLondonParis())
+            .Add(c => c.PricedPassengers, 1)
+            .AddCascadingValue(UserRole.Passenger));
+
+        cut.Find("#passengerName").Change("Ada Lovelace");
+        cut.Find("#passengerEmail").Change("ada@example.com");
+        cut.FindAll("button").Single(b => b.TextContent == "Confirm and pay").Click();
+
+        Assert.Equal(0, gateway.SuccessfulCharges);
+        Assert.Contains("You were not charged.", cut.Find("ol.steps.vertical").TextContent);
+        Assert.DoesNotContain("System.", cut.Markup);   // a plain sentence, not a .NET type name
+    }
+
+    [Fact]
+    public void TimetableTab_JourneyPastMidnight_MarksTheNextDay()
+    {
+        var cut = Render<TimetableTab>(p => p
+            .Add(c => c.Route, ParisLyon)
+            .Add(c => c.Departure, new TimeOnly(23, 30)));
+
+        var lastProgressRow = cut.FindAll(".card")[1].QuerySelectorAll("tbody tr").Last();
+        Assert.Contains("01:30 +1d", lastProgressRow.TextContent);
     }
 }

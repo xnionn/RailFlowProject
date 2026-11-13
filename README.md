@@ -6,6 +6,8 @@ and everything that touches the outside world (files, payment, UI, SignalR) sits
 
 Final project for **Introduction to Functional Programming** (Astana IT University, 2026).
 
+Tests run on Linux, Windows and macOS and the Docker image is built on every push ([.github/workflows/ci.yml](.github/workflows/ci.yml)).
+
 | Team member | Group |
 | :--- | :--- |
 | Akezhan Muzamelov | IT-2510 |
@@ -48,7 +50,7 @@ Detailed QA and deployment material: [docs/TESTING.md](docs/TESTING.md), [docs/Q
 **Requirements:** .NET 10 SDK (Windows, macOS or Linux).
 
 ```bash
-dotnet test                                  # 165 tests
+dotnet test                                  # 198 tests
 dotnet run --project src/RailFlow.Web        # then open http://localhost:5163
 ```
 
@@ -80,12 +82,21 @@ normal booking site.
 
 | Tab | Who sees it | What you can do | Course topics shown |
 | :--- | :--- | :--- | :--- |
-| **Plan a trip** | everyone | Pick stations (type a name or choose from the list, ⇄ swaps them), departure time, passengers and package. The result shows departure and arrival times, journey time with stops, changes, the legs and the fare breakdown, with **Book this trip** and **View timetable**. Undo/Redo restores earlier searches. | Unions, validation gate, `Maybe`, `Bind`/`Map`, railway-oriented flow, immutable state |
-| **Bookings** | everyone | Book the priced trip (name, e-mail, optional promo code). The amount to pay, including the promo discount and booking fee, is shown before payment. After booking the e-ticket can be exported as text, CSV or JSON. Passengers see their own bookings; dispatchers see all bookings, the revenue report and the export to `bookings.log` / `bookings.json`. | Temporal coupling, factories, files and serialization, equality and ordering, LINQ, extension methods |
-| **Timetable** | everyone | Stop-by-stop times for the priced trip from the chosen departure time, and the train's progress in 20-minute steps. | Recursion, indefinite loops |
+| **Plan a trip** | everyone | Pick stations (type a name or choose from the list, ⇄ swaps them), travel date, departure time, passengers and package. The result shows departure and arrival times, journey time with stops, changes, the legs and the fare breakdown, with **Book this trip** and **View timetable**. Undo/Redo restores earlier searches. | Unions, validation gate, `Maybe`, `Bind`/`Map`, railway-oriented flow, immutable state |
+| **Bookings** | everyone | Book the priced trip (name, e-mail, optional promo code). The amount to pay, including the promo discount and booking fee, is shown before payment. After booking the e-ticket can be exported as text, CSV or JSON. A signed-in passenger sees the bookings of their account (also after a reload); a guest sees the bookings made in the current browser tab; dispatchers see all bookings, the revenue report and the export to `bookings.log` / `bookings.json`. | Temporal coupling, factories, files and serialization, equality and ordering, LINQ, extension methods |
+| **Timetable** | everyone | Stop-by-stop times for the priced trip on the chosen date and departure time, and the train's progress in 20-minute steps. | Recursion, indefinite loops |
 | **Network** | dispatchers (Operations) | All stations and connections loaded from CSV, any rejected CSV lines (the shipped files have none; the Lab tab's station check shows how bad lines are rejected), connections currently under engineering works. | Files, `Result` parsing |
 | **Dispatcher** | dispatchers (Operations) | Switch engineering works per station (+10% on the affected sections), simulate failures of any service or the payment provider, send an announcement, watch live activity. | Error handling, role-based access, SignalR |
 | **Lab** | with Course notes on | 200,000-section recursion test (trampoline), route cache statistics, station CSV checker, and a benchmark comparing imperative, LINQ, combinator, loop and iterator versions of the same computation. | Trampolining, thread-safe memoization, currying / partial application, performance trade-offs |
+
+The open tab is part of the address (`/?tab=bookings`, `/?tab=timetable`, …), so links, reload and the browser's Back
+button work. The tabs follow the WAI-ARIA tabs pattern: ←/→ (and Home/End) move between them.
+
+### Screens
+
+| Plan a trip | Dark theme | Timetable |
+| :---: | :---: | :---: |
+| ![Plan a trip](docs/img/plan-desktop.png) | ![Plan a trip in dark mode](docs/img/plan-dark.png) | ![Timetable](docs/img/timetable-desktop.png) |
 
 ---
 
@@ -97,7 +108,7 @@ normal booking site.
 | 2 | Writing, debugging and testing functions | Pure functions + `tests/RailFlow.Tests` |
 | 3 | Interfaces, immutable models | `BookingReceipt` (`IComparable<T>`, equality by `BookingId`), `record ... with`, `ImmutableAppStateContainer` |
 | 4 | Files, streams, serialization | `IBookingJournal` → `TextBookingJournal` / `JsonBookingJournal`, `ReceiptLineCodec.ToLine/FromLine` |
-| 4 (L4) | Higher-order combinators | `Combinators.cs`: `Tap`, `Fork`, `Alt`, `Compose`, `Transduce` |
+| 4 (L4) | Higher-order combinators | `Combinators.cs`: `Tap` (used for logging in the web shell, `AppLog.cs`), `Fork`, `Alt`, `Compose`, `Transduce` |
 | 5 | Composing functions with pipelining | `Pipelining.Pipe`, `Pipelining.Pipeline` (Aggregate), `BookingWorkflow.FarePipeline` |
 | 5–6 (L5) | Discriminated unions | `CustomerOffering`, `ValidatedUserInput`, `Maybe<T>`, `Result<T>`, `Either<L,R>`, `Trampoline<T>` |
 | 6 | Temporal coupling, factories, file handling | `BookingDraft → ValidatedBooking → PricedBooking → BookingReceipt`; `TicketExportFactory`, `BookingJournalFactory`; `NetworkDataLoader` |
@@ -106,7 +117,7 @@ normal booking site.
 | 7–8 (L7) | Currying, partial application, indefinite loops | `CurryingAndLoops.cs`, `BenchmarkAndLoopLab` CSV parser and loggers, `IterateUntil`, `TransitStepEnumerable` |
 | 8 (L8) | Memoization | `Memoization.cs`, `MemoizedFunc`, memoized BFS in `TransitGraphEngine` |
 | 8 | Extension methods and LINQ | `LazySequence.Filter/Transform` (yield), `BookingQueries` (`GroupBy`, `Sum`, empty-data handling) |
-| 9 (L9) | Recursion, trampolining, performance | `Trampoline.cs`, `RecursiveTimetable`, `BenchmarkAndLoopLab` |
+| 9 (L9) | Recursion, trampolining, performance | `Trampoline.cs`, `RecursiveTimetable`, `TrainSimulation` (indefinite loop), `BenchmarkAndLoopLab`, `Memoization.cs` |
 | 10 | Engineering a functional application | Pure core in `RailFlow.Core`, I/O in `RailFlow.Infrastructure`, CSV import with per-line validation, test pyramid |
 
 ---
@@ -125,7 +136,7 @@ flowchart TB
     subgraph Infra["RailFlow.Infrastructure — imperative shell"]
         Services["RailMappingSystem · RailRoutePlanner · RailTrafficMonitor · RailPricingCalculator"]
         Storage["NetworkDataLoader (CSV files) · TextBookingJournal · JsonBookingJournal"]
-        Gateway["SimulatedPaymentGateway · ChaosAndTrafficController"]
+        Gateway["SimulatedPaymentGateway · OperationsControls"]
         State["ImmutableAppStateContainer (undo/redo, role)"]
         Security["DemoUserStore · PasswordHasher (PBKDF2) · RoleNames"]
     end
@@ -201,7 +212,7 @@ sequenceDiagram
     Orch->>Map: FindLocation(origin), FindLocation(destination)
     alt both stations found
         Orch->>Plan: Bind(PlanRoute)
-        Orch->>Traf: Bind(CheckForRoadworks)
+        Orch->>Traf: Bind(CheckEngineeringWorks)
         Orch->>Price: Bind(CalculatePrice)
         Price-->>Orch: Something<PricedItinerary>
     else Nothing or Error
@@ -228,13 +239,17 @@ flowchart LR
 ```
 src/RailFlow.Core/            pure code, no I/O
   Functional/                 Maybe/Result/Either, combinators, currying, memoization, pipelining, trampoline, lazy operators
-  Domain/                     records, route pipeline, BFS, booking workflow, CSV parsing, ticket export, reports
+  Domain/                     records, route pipeline, BFS, tariff, timetable and train simulation,
+                              booking workflow, CSV parsing, ticket export, reports
 src/RailFlow.Infrastructure/
-  Services/                   pipeline services, chaos controller, payment gateway, app state
+  Services/                   pipeline services, operations controls (engineering works, simulated failures),
+                              payment gateway, app state
   Storage/                    CSV network loader, text and JSON booking journals + factory
   Security/                   demo accounts, PBKDF2 password hashing, role mapping
-src/RailFlow.Web/             Blazor components and sign-in page, Program.cs (DI, auth, API), SignalR hub, Data/*.csv
-tests/RailFlow.Tests/         xUnit tests
+src/RailFlow.Web/             Blazor components and sign-in page, Program.cs (DI, auth, rate limit, API), SignalR hub,
+                              AppLog.cs (log messages), Data/*.csv
+tests/RailFlow.Tests/         xUnit, bUnit and HTTP/SignalR integration tests
+.github/workflows/ci.yml      tests on Linux, Windows and macOS; Docker image build and health check
 ```
 
 ---
@@ -268,9 +283,26 @@ RailFlow is a teaching-scale model of that flow: one network from CSV files, a s
 
 ## 7. Relevance
 
-Booking and pricing systems integrate unreliable external parts (maps, sensors, payment providers, data files).
-RailFlow shows how to keep those failures visible in the types, so the UI always has a defined state to show,
-and how pure business logic can be tested without any of those external systems.
+Buying a train ticket is a short flow with many ways to fail: a mistyped station, a route that does not exist,
+engineering works that change the price, a payment provider that is down, a booking file that was damaged.
+In many booking sites these cases end in a generic error page or, worse, a charge without a booking.
+RailFlow makes every one of them a value the page has to handle:
+
+- **Clear outcomes for the passenger.** An unknown station is `Nothing` ("No route found" with a suggestion),
+  a failing service is `Error` ("try again later"), a declined card is a `Failure` with its reason, and the
+  amount to pay is shown before payment, including discount and booking fee.
+- **No double charges.** The booking stages are separate types (`BookingDraft` → `ValidatedBooking` →
+  `PricedBooking` → `BookingReceipt`) and each step only accepts the previous stage, so the order is checked
+  by the types. The booking file is checked before the card is charged, and a booked search cannot be paid
+  again, even after its price was updated.
+- **Prices that follow operations.** When a dispatcher marks engineering works, every open search is priced
+  again and only the affected sections are charged extra.
+- **Testable rules.** Fares, timetables and the simulation are pure functions, tested without a server,
+  files or a payment provider.
+
+The same problems exist for national operators, for example the online ticket sales of Kazakhstan's
+railways, where a route can span several trains and prices depend on date and service. RailFlow is a small,
+working model of that flow and of how functional techniques keep it predictable.
 
 ---
 
@@ -278,18 +310,18 @@ and how pure business logic can be tested without any of those external systems.
 
 | Endpoint | Description |
 | :--- | :--- |
-| `GET /api/route-quote?from=LONDON&to=ZURICH&passengers=2` | Runs the pricing pipeline. `200` with the quote, `404` if a station or route is not found, `500` problem details on a service fault. |
+| `GET /api/route-quote?from=LONDON&to=ZURICH&passengers=2` | Runs the pricing pipeline for a single ticket. The input passes the same validation as the planner form: `400` validation problem for an empty or identical station or passengers outside 1–50. `200` with the quote, `404` if a station or route is not found, `500` problem details on a service fault. |
 | `GET /api/bookings` | All stored bookings from both journals (duplicates merged by booking id). Dispatcher only: `401` without sign-in, `403` for a passenger. |
 | `GET /api/bookings/{bookingId}/ticket?format=PlainText\|Csv\|Json` | One e-ticket produced by `TicketExportFactory`. Dispatcher only, because the ticket shows name and e-mail; `404` if the booking does not exist. Passengers download their own ticket on the Bookings tab. |
 | `GET /healthz` | Health probe for Docker or a hosting platform: `200 Healthy`. |
-| `GET /login`, `POST /account/logout` | Sign-in page and sign-out (the sign-out form carries an antiforgery token). |
-| SignalR `/hubs/traffic` | Anyone can connect and receive `ReceiveTrafficUpdate` and `ReceiveAdvisory`. `ToggleStationRoadworks(station)` and `BroadcastAdvisory(text)` require a signed-in dispatcher. |
+| `GET /login`, `POST /account/logout` | Sign-in page and sign-out (the sign-out form carries an antiforgery token). Sign-in attempts are limited per client address (`Security:LoginAttemptsPerMinute`, default 10); more give `429`. |
+| SignalR `/hubs/traffic` | Anyone can connect and receive `ReceiveTrafficUpdate` and `ReceiveAdvisory`. `ToggleEngineeringWorks(station)` and `BroadcastAdvisory(text)` require a signed-in dispatcher. |
 
 ---
 
 ## 9. Testing
 
-`dotnet test` runs 165 tests (unit, bUnit component, HTTP integration and SignalR tests). Coverage figures and how to measure them are in [docs/TESTING.md](docs/TESTING.md).
+`dotnet test` runs 198 tests (unit, bUnit component, HTTP integration and SignalR tests). Coverage figures and how to measure them are in [docs/TESTING.md](docs/TESTING.md).
 
 | File | Covers |
 | :--- | :--- |
@@ -297,13 +329,14 @@ and how pure business logic can be tested without any of those external systems.
 | `ResultAndPipelineTests.cs` | `Result`/`Either` map and bind, short-circuiting, `ToResult`, `Pipe`, `Compose`, `Pipeline` order and identity |
 | `RecursionAndLazyTests.cs` | Recursion vs trampoline, 200,000-segment stack safety, timetable times and day rollover, deferred execution of `Filter` |
 | `BookingWorkflowTests.cs` | Booking stages with a fake gateway (call counting), validation failures, receipt equality/ordering, text codec round trip, export factory, LINQ reports |
+| `SimulationAndPricingTests.cs` | Journey time with stops, train position over time, arrival matches the timetable, the pure tariff (return share, hotel tiers, surcharge only on affected kilometres) |
+| `MemoizationTests.cs` | `Memoize`, `MemoizeBy`, `MemoizeAsync` (a failure is not cached), `Flatten` |
 | `StorageAndCsvTests.cs` | Real files in a temp folder: missing file = empty history, append without duplicates, corrupt lines, invalid JSON, CSV import and fallback, full book-and-store flow |
 | `MonadsAndCombinatorsTests.cs` | `Reader` and `State` monads, `Tap`, `Alt`, `AltMaybe`, partially applied logger |
 | `PlannerValidationTests.cs` | Planner input union (empty, same station, passenger limits) and that all benchmark approaches agree |
 | `AuthenticationTests.cs` | PBKDF2 hashing, demo user store, role/claim mapping |
 | `ComponentTests.cs` | bUnit: `StatCard`, `PipelineSteps`, `MaybeView` (templates, retry only for dispatchers) |
 | `TabComponentTests.cs` | bUnit: every tab — dispatcher controls locked for passengers, own bookings only, amount to pay before payment, charge once, timetable follows departure, Lab cache and CSV check, course notes hidden by default |
-| `SimulationAndPricingTests.cs` | Journey time with stops, train position over time, arrival matches the timetable, surcharge only on affected kilometres |
 | `WebApiIntegrationTests.cs` | The real app over HTTP: pages, route quote, sign-in with antiforgery, 401/403 rules, open-redirect guard, ticket export |
 | `TrafficHubTests.cs` | A SignalR client against the hub: guests and passengers refused, dispatcher changes reach every client |
 
@@ -315,16 +348,16 @@ The manual test plan for browsers and phone widths is in [docs/QA.md](docs/QA.md
 
 | Criterion | How the project addresses it |
 | :--- | :--- |
-| Code structure | Three projects with inward dependencies; pure core separated from I/O; one component per tab |
+| Code structure | Three projects with inward dependencies; business rules (tariff, timetable, simulation, booking stages) are pure functions in Core; Infrastructure only adds I/O and the simulated-failure switches; one component per tab; enums instead of status strings |
 | Component reusability | Generic `MaybeView<TItem>` with `RenderFragment<T>` templates and a role received via `CascadingParameter`, `PipelineSteps` with `EventCallback<T>`, `StatCard` reused in the Bookings report, Network and Lab tabs |
-| Cross-platform | .NET 10, no OS-specific APIs; paths built with `Path.Combine`; Linux container image (`Dockerfile`) |
+| Cross-platform | .NET 10, no OS-specific APIs; paths built with `Path.Combine`; CI runs the tests on Linux, Windows and macOS; Linux container image (`Dockerfile`) built and health-checked in CI |
 | State management | Scoped `ImmutableAppStateContainer` with undo/redo stacks and change notifications |
-| UI / UX / responsiveness | Passenger, operations and course views separated by role and the Course notes switch; one formatting helper (`UiText`) for money, times, counts and station names; light theme with automatic dark mode; keyboard focus styles; CSS grid with 900 px and 600 px breakpoints (checked at 375 px phone width, no horizontal scrolling) |
+| UI / UX / responsiveness | Passenger, operations and course views separated by role and the Course notes switch; one formatting helper (`UiText`) for money, times, counts and station names; light theme with automatic dark mode; keyboard focus styles and WAI-ARIA tabs with arrow keys; tabs addressable by URL; CSS grid with 900 px and 600 px breakpoints (checked at 375 px phone width, no horizontal scrolling) |
 | Core functionality | Route search, pricing with engineering works and packages, booking, export, history, reports |
-| Advanced features | SignalR hub, cookie sign-in with roles checked on the server (UI, hub methods, API), Minimal API, CSV import, two storage formats |
-| Error handling | `Maybe`/`Result` everywhere, invalid input stopped by the `ValidatedUserInput` union, fault injection console, corrupt-data tolerance in storage and CSV, no double charge on repeated clicks |
+| Advanced features | SignalR hub, cookie sign-in with roles checked on the server (UI, hub methods, API), sign-in rate limiting, bookings owned by account, Minimal API with validation, CSV import, two storage formats, CI on three operating systems |
+| Error handling | `Maybe`/`Result` everywhere, invalid input stopped by the `ValidatedUserInput` union (UI and API), fault injection console, corrupt-data tolerance in storage and CSV, no double charge (repeated clicks or a re-priced search), friendly 404 and error pages, structured logging of every `Error` and storage `Failure` with the exception kept |
 | Efficiency / scalability / resources | Memoized BFS, lazy sequences, stack-safe recursion, server-side rendering, atomic JSON writes |
-| Testing / QA | 165 automated tests with a coverage report ([docs/TESTING.md](docs/TESTING.md)) and a manual QA plan ([docs/QA.md](docs/QA.md)) |
+| Testing / QA | 198 automated tests with a coverage report ([docs/TESTING.md](docs/TESTING.md)) and a manual QA plan ([docs/QA.md](docs/QA.md)) |
 | Documentation | This README, [docs/](docs/) for testing, QA and deployment, XML comments on public APIs |
 | Deployment | Multi-stage `Dockerfile` (non-root user, data volume), `/healthz`, persisted data-protection keys ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)) |
 
@@ -333,4 +366,5 @@ The manual test plan for browsers and phone widths is in [docs/QA.md](docs/QA.md
 - Accounts are two fixed demo users from configuration; there is no registration or password reset.
 - The payment gateway is simulated and never contacts a real provider.
 - Engineering works and failure switches are shared by all users of one server instance; booking files are meant for a single server (see the scaling notes in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
-- Some helpers from the course labs are not used by the app: `Reader`, `State`, `Either`, `Tap`, `Alt` / `AltMaybe` are covered by tests only; the general `Memoize` / `MemoizeBy` / `MemoizeAsync` and `Flatten` helpers are neither used nor tested (the app uses its own memoized route search).
+- Some helpers from the course labs are covered by tests but not used by the app: `Reader`, `State`, `Either`, `Alt` / `AltMaybe`, `Flatten` and the general `Memoize` helpers (the route search has its own thread-safe memoization with statistics).
+- Booking files are read and written synchronously; that is fine for one server and a few thousand bookings, a database would replace them for more.

@@ -26,7 +26,7 @@ public class BookingWorkflowTests
 
     internal static PricedItinerary PriceLondonParis()
     {
-        var chaos = new ChaosAndTrafficController();
+        var chaos = new OperationsControls();
         var orchestrator = new RailwayPipelineOrchestrator(
             new RailMappingSystem(chaos),
             new RailRoutePlanner(chaos),
@@ -84,9 +84,9 @@ public class BookingWorkflowTests
     }
 
     [Fact]
-    public void SimulatedGateway_RespectsPaymentOutageFromChaosConsole()
+    public void SimulatedGateway_RespectsSimulatedPaymentOutage()
     {
-        var chaos = new ChaosAndTrafficController();
+        var chaos = new OperationsControls();
         var gateway = new SimulatedPaymentGateway(chaos);
 
         Assert.True(gateway.Charge(50m).IsSuccess());
@@ -122,6 +122,22 @@ public class BookingWorkflowTests
         Assert.Equal(original.OfferingTitle, parsed.OfferingTitle);
         Assert.IsType<Failure<BookingReceipt>>(ReceiptLineCodec.FromLine("garbage|line"));
         Assert.IsType<Failure<BookingReceipt>>(ReceiptLineCodec.FromLine(line.Replace("1234.5", "lots")));
+    }
+
+    [Fact]
+    public void ReceiptLineCodec_KeepsOwnerAndTravelDate_AndStillReadsOldLines()
+    {
+        var original = Receipt("RF-OWN", 99m) with { Owner = "passenger", TravelDate = new DateOnly(2026, 12, 24) };
+
+        var parsed = Assert.IsType<Success<BookingReceipt>>(ReceiptLineCodec.FromLine(ReceiptLineCodec.ToLine(original))).Data;
+        Assert.Equal("passenger", parsed.Owner);
+        Assert.Equal(new DateOnly(2026, 12, 24), parsed.TravelDate);
+
+        // A line saved before the two fields existed: 11 fields, no owner, no travel date.
+        var oldLine = string.Join('|', ReceiptLineCodec.ToLine(original).Split('|').Take(11));
+        var old = Assert.IsType<Success<BookingReceipt>>(ReceiptLineCodec.FromLine(oldLine)).Data;
+        Assert.Equal("", old.Owner);
+        Assert.Null(old.TravelDate);
     }
 
     [Theory]
@@ -161,5 +177,27 @@ public class BookingWorkflowTests
         var fromJson = new[] { Receipt("RF-2", 20m), Receipt("RF-3", 30m) };
 
         Assert.Equal(3, BookingQueries.MergeDistinct(fromText, fromJson).Count);
+    }
+
+    [Fact]
+    public void Workflow_TravelDateInThePast_IsRefused_BeforeAnyCharge()
+    {
+        var gateway = new FakeGateway();
+        var yesterday = DateOnly.FromDateTime(IssuedAt).AddDays(-1);
+        var draft = new BookingDraft(PriceLondonParis(), 1, "Aigerim Sadykova", "aigerim@example.com", TravelDate: yesterday);
+
+        var trace = BookingWorkflow.Run(draft, "", gateway.Charge, IssuedAt);
+
+        Assert.Equal("The travel date is in the past.", Assert.IsType<Failure<ValidatedBooking>>(trace.Validated).Reason);
+        Assert.Empty(gateway.Charges);
+    }
+
+    [Fact]
+    public void Workflow_TravelDateToday_IsAccepted()
+    {
+        var draft = new BookingDraft(PriceLondonParis(), 1, "Aigerim Sadykova", "aigerim@example.com",
+            TravelDate: DateOnly.FromDateTime(IssuedAt));
+
+        Assert.IsType<Success<BookingReceipt>>(BookingWorkflow.Run(draft, "", new FakeGateway().Charge, IssuedAt).Receipt);
     }
 }

@@ -14,9 +14,6 @@ public static class BookingQueries
     public static IEnumerable<BookingReceipt> ForOrigin(this IEnumerable<BookingReceipt> receipts, string station) =>
         receipts.Filter(r => string.Equals(r.Origin, station, StringComparison.OrdinalIgnoreCase));
 
-    public static IEnumerable<BookingReceipt> ForOffering(this IEnumerable<BookingReceipt> receipts, string offeringTitle) =>
-        receipts.Filter(r => string.Equals(r.OfferingTitle, offeringTitle, StringComparison.OrdinalIgnoreCase));
-
     public static decimal TotalRevenue(this IEnumerable<BookingReceipt> receipts) =>
         receipts.Sum(r => r.AmountPaid);
 
@@ -43,9 +40,6 @@ public static class BookingQueries
     /// </summary>
     public static ImmutableList<BookingReceipt> MostExpensive(this IEnumerable<BookingReceipt> receipts, int count) =>
         receipts.OrderDescending().Take(count).ToImmutableList();
-
-    public static IEnumerable<string> RouteLabels(this IEnumerable<BookingReceipt> receipts) =>
-        receipts.Transform(r => $"{r.Origin} → {r.Destination}");
 
     /// <summary>
     /// Merges receipts from several stores; duplicates collapse because receipts are equal by BookingId.

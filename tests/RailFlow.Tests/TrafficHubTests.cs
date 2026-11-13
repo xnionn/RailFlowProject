@@ -54,7 +54,7 @@ public sealed class TrafficHubTests(RailFlowWebFactory factory) : IClassFixture<
         var guest = await ConnectAsync();
 
         Assert.Equal(HubConnectionState.Connected, guest.State);
-        var error = await Assert.ThrowsAsync<HubException>(() => guest.InvokeAsync("ToggleStationRoadworks", "PRAGUE"));
+        var error = await Assert.ThrowsAsync<HubException>(() => guest.InvokeAsync("ToggleEngineeringWorks", "PRAGUE"));
         Assert.Contains("unauthorized", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -76,7 +76,7 @@ public sealed class TrafficHubTests(RailFlowWebFactory factory) : IClassFixture<
         listener.On<string>("ReceiveAdvisory", message => advisory.TrySetResult(message));
 
         var dispatcher = await ConnectAsync(await AuthCookieAsync("dispatcher", "dispatcher-demo"));
-        await dispatcher.InvokeAsync("ToggleStationRoadworks", "PRAGUE");
+        await dispatcher.InvokeAsync("ToggleEngineeringWorks", "PRAGUE");
 
         var (station, active) = await update.Task.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal("PRAGUE", station);
@@ -88,6 +88,6 @@ public sealed class TrafficHubTests(RailFlowWebFactory factory) : IClassFixture<
         Assert.Contains("Prague", message);
 
         // Put the shared state back.
-        await dispatcher.InvokeAsync("ToggleStationRoadworks", "PRAGUE");
+        await dispatcher.InvokeAsync("ToggleEngineeringWorks", "PRAGUE");
     }
 }

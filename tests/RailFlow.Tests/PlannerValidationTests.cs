@@ -60,7 +60,7 @@ public sealed class PlannerValidationTests
     [Fact]
     public void Benchmark_AllApproachesComputeTheSameElevation()
     {
-        var entries = BenchmarkAndLoopLab.RunElevationTelemetryBenchmark(3_000);
+        var entries = BenchmarkAndLoopLab.RunLoopBenchmark(3_000);
 
         Assert.Equal(6, entries.Count);
         // 3,000 characters, every third one is 'v': 2,000 up and 1,000 down.

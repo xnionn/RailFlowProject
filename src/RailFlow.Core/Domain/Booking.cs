@@ -6,20 +6,27 @@ namespace RailFlow.Core.Domain;
 
 // --- Week 6: Handling Temporal Coupling ---
 // Each booking stage is its own immutable record, and each step takes the previous stage and
-// returns the next one. Charge accepts only a PricedBooking, so "charge before validation"
-// or "price twice" are no longer valid call sequences: the compiler rejects them.
+// returns the next one. Charge accepts only a PricedBooking, and in the app a PricedBooking only comes
+// out of ApplyPromo, which needs a ValidatedBooking: "charge before validation" is not a call sequence
+// the types allow.
 
+/// <param name="Owner">User name of the signed-in account that books, or "" for a guest.</param>
+/// <param name="TravelDate">Day of travel chosen on the planner.</param>
 public sealed record BookingDraft(
     PricedItinerary Itinerary,
     int Passengers,
     string PassengerName,
-    string Email);
+    string Email,
+    string Owner = "",
+    DateOnly? TravelDate = null);
 
 public sealed record ValidatedBooking(
     PricedItinerary Itinerary,
     int Passengers,
     string PassengerName,
-    string Email);
+    string Email,
+    string Owner = "",
+    DateOnly? TravelDate = null);
 
 public sealed record PricedBooking(
     ValidatedBooking Booking,
@@ -45,7 +52,9 @@ public sealed record BookingReceipt(
     int Passengers,
     decimal AmountPaid,
     string Currency,
-    DateTime IssuedAtUtc) : IComparable<BookingReceipt>
+    DateTime IssuedAtUtc,
+    string Owner = "",
+    DateOnly? TravelDate = null) : IComparable<BookingReceipt>
 {
     public bool Equals(BookingReceipt? other) =>
         other is not null && string.Equals(BookingId, other.BookingId, StringComparison.Ordinal);
@@ -89,15 +98,17 @@ public static class BookingWorkflow
             AddFee.Curry()(serviceFee),
             RoundToCents);
 
-    public static Result<ValidatedBooking> Validate(BookingDraft draft) =>
+    /// <param name="today">The current date, passed in so the check stays a pure function. A travel date before it is refused.</param>
+    public static Result<ValidatedBooking> Validate(BookingDraft draft, DateOnly? today = null) =>
         Result.Ok(draft with { PassengerName = draft.PassengerName.Trim(), Email = draft.Email.Trim() })
+            .Ensure(d => today is null || d.TravelDate is null || d.TravelDate >= today, "The travel date is in the past.")
             .Ensure(d => d.PassengerName.Length >= 2, "Passenger name must have at least 2 characters.")
             .Ensure(d => d.PassengerName.Length <= 60, "Passenger name must be at most 60 characters.")
             .Ensure(d => !d.PassengerName.Contains('|'), "Passenger name must not contain '|'.")
             .Ensure(d => IsPlausibleEmail(d.Email), "E-mail address is not valid.")
             .Ensure(d => d.Passengers is >= 1 and <= 50, "Passenger count must be between 1 and 50.")
             .Ensure(d => d.Itinerary.FinalPrice > 0m, "The itinerary has no price to charge.")
-            .Map(d => new ValidatedBooking(d.Itinerary, d.Passengers, d.PassengerName, d.Email));
+            .Map(d => new ValidatedBooking(d.Itinerary, d.Passengers, d.PassengerName, d.Email, d.Owner, d.TravelDate));
 
     public static Result<PricedBooking> ApplyPromo(ValidatedBooking booking, string? promoCode) =>
         Quote(booking.Itinerary.FinalPrice, promoCode)
@@ -138,7 +149,9 @@ public static class BookingWorkflow
                 Passengers: priced.Booking.Passengers,
                 AmountPaid: priced.AmountDue,
                 Currency: priced.Booking.Itinerary.Currency,
-                IssuedAtUtc: issuedAtUtc));
+                IssuedAtUtc: issuedAtUtc,
+                Owner: priced.Booking.Owner,
+                TravelDate: priced.Booking.TravelDate));
 
     /// <summary>
     /// Runs the whole workflow and keeps every stage, so the UI can show where it stopped.
@@ -149,7 +162,7 @@ public static class BookingWorkflow
         Func<decimal, Result<string>> paymentGateway,
         DateTime issuedAtUtc)
     {
-        var validated = Validate(draft);
+        var validated = Validate(draft, DateOnly.FromDateTime(issuedAtUtc));
         var priced = validated.Bind(v => ApplyPromo(v, promoCode));
         var receipt = priced.Bind(p => Charge(p, paymentGateway, issuedAtUtc));
         return new BookingTrace(validated, priced, receipt);
@@ -194,7 +207,10 @@ public sealed record BookingTrace(
 public static class ReceiptLineCodec
 {
     private const char Separator = '|';
-    private const int FieldCount = 11;
+    private const int FieldCount = 13;
+
+    /// <summary>Lines written before bookings had an owner and a travel date; they are still read.</summary>
+    private const int OldFieldCount = 11;
 
     public static string ToLine(BookingReceipt r) =>
         string.Join(Separator,
@@ -208,13 +224,24 @@ public static class ReceiptLineCodec
             r.Passengers.ToString(CultureInfo.InvariantCulture),
             r.AmountPaid.ToString(CultureInfo.InvariantCulture),
             r.Currency,
-            r.IssuedAtUtc.ToString("O", CultureInfo.InvariantCulture));
+            r.IssuedAtUtc.ToString("O", CultureInfo.InvariantCulture),
+            r.Owner,
+            r.TravelDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "");
 
     public static Result<BookingReceipt> FromLine(string line)
     {
         var f = line.Split(Separator);
-        if (f.Length != FieldCount)
+        if (f.Length != FieldCount && f.Length != OldFieldCount)
             return Result.Fail<BookingReceipt>($"Expected {FieldCount} fields but found {f.Length}.");
+
+        var owner = f.Length == FieldCount ? f[11] : "";
+        DateOnly? travelDate = null;
+        if (f.Length == FieldCount && f[12].Length > 0)
+        {
+            if (!DateOnly.TryParseExact(f[12], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var day))
+                return Result.Fail<BookingReceipt>($"Travel date '{f[12]}' is not a valid date.");
+            travelDate = day;
+        }
 
         if (!int.TryParse(f[7], NumberStyles.Integer, CultureInfo.InvariantCulture, out var passengers))
             return Result.Fail<BookingReceipt>($"Passengers '{f[7]}' is not a number.");
@@ -227,6 +254,6 @@ public static class ReceiptLineCodec
 
         return string.IsNullOrWhiteSpace(f[0])
             ? Result.Fail<BookingReceipt>("Booking id is empty.")
-            : Result.Ok(new BookingReceipt(f[0], f[1], f[2], f[3], f[4], f[5], f[6], passengers, amount, f[9], issued));
+            : Result.Ok(new BookingReceipt(f[0], f[1], f[2], f[3], f[4], f[5], f[6], passengers, amount, f[9], issued, owner, travelDate));
     }
 }

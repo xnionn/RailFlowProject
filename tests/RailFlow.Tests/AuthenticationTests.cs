@@ -19,7 +19,7 @@ public sealed class AuthenticationTests
     private static DemoUserStore Store() => new(
     [
         Entry("passenger", "pass-1", UserRole.Passenger, "Demo Passenger"),
-        Entry("dispatcher", "disp-1", UserRole.DispatcherAdmin, "Demo Dispatcher")
+        Entry("dispatcher", "disp-1", UserRole.Dispatcher, "Demo Dispatcher")
     ]);
 
     [Fact]
@@ -61,7 +61,7 @@ public sealed class AuthenticationTests
         var account = Assert.IsType<Success<UserAccount>>(result).Data;
         Assert.Equal("dispatcher", account.UserName);
         Assert.Equal("Demo Dispatcher", account.DisplayName);
-        Assert.Equal(UserRole.DispatcherAdmin, account.Role);
+        Assert.Equal(UserRole.Dispatcher, account.Role);
     }
 
     [Fact]
@@ -98,11 +98,11 @@ public sealed class AuthenticationTests
     [Fact]
     public void Principal_RoundTripsRole()
     {
-        var dispatcher = RoleNames.ToPrincipal(new UserAccount("d", "D", UserRole.DispatcherAdmin), "test");
+        var dispatcher = RoleNames.ToPrincipal(new UserAccount("d", "D", UserRole.Dispatcher), "test");
         var passenger = RoleNames.ToPrincipal(new UserAccount("p", "P", UserRole.Passenger), "test");
 
         Assert.True(dispatcher.IsInRole(RoleNames.Dispatcher));
-        Assert.Equal(UserRole.DispatcherAdmin, RoleNames.FromPrincipal(dispatcher));
+        Assert.Equal(UserRole.Dispatcher, RoleNames.FromPrincipal(dispatcher));
         Assert.Equal(UserRole.Passenger, RoleNames.FromPrincipal(passenger));
         Assert.Equal("D", dispatcher.FindFirst(RoleNames.DisplayNameClaim)?.Value);
     }

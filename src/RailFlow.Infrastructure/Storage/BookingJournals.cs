@@ -55,7 +55,15 @@ internal static class FileBoundary
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
-            return new Failure<T>($"Storage error for '{Path.GetFileName(path)}': {ex.Message}", ex);
+            // The user gets a plain sentence; the exception stays attached to the Failure for the log.
+            var file = Path.GetFileName(path);
+            var reason = ex switch
+            {
+                JsonException => $"The booking file '{file}' is damaged and could not be read.",
+                UnauthorizedAccessException => $"There is no permission to use the booking file '{file}'.",
+                _ => $"The booking file '{file}' could not be read or written."
+            };
+            return new Failure<T>(reason, ex);
         }
     }
 

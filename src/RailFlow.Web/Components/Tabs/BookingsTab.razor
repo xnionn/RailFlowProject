@@ -1,14 +1,10 @@
-@* "Bookings" tab: books the trip from the last search, shows the booking progress, the e-ticket and the
-   booking history. It receives the session's BookingsTabState (kept by Home so the form, the history and
-   the list of the user's own bookings survive switching tabs), the last search report with its passenger
-   count, the origin typed on the planner and an OnPlanTrip callback. The cascaded role decides what the
-   history shows: dispatchers see every booking and the revenue report, everyone else only the bookings
-   made in this session. The journal factory, the payment gateway and the app state (for the activity
-   feed) are injected because only this tab uses them. Opening the tab reloads the history. *@
+@* Bookings tab: books the last priced search, shows progress, the e-ticket and the history.
+   Dispatchers see every booking and the revenue report; others see only their own. *@
 
 @inject Func<JournalFormat, IBookingJournal> JournalFactory
 @inject SimulatedPaymentGateway PaymentGateway
 @inject ImmutableAppStateContainer AppState
+@inject ILogger<BookingsTab> Logger
 
 <div class="grid-2">
     <section class="card">
@@ -24,7 +20,7 @@
             var route = bookable.TrafficRoute.Route;
             <p class="trip-meta" style="margin-bottom:0.75rem;">
                 <strong>@UiText.Station(route.Origin) → @UiText.Station(route.Destination)</strong> ·
-                @bookable.Offering.Title · @UiText.Count(PricedPassengers, "passenger")
+                @UiText.Day(TravelDate) · @bookable.Offering.Title · @UiText.Count(PricedPassengers, "passenger")
             </p>
 
             <div class="form-grid">
@@ -77,7 +73,7 @@
             }
 
             <div class="actions">
-                @if (ReferenceEquals(State.BookedReport, Report))
+                @if (State.BookedSearchId == SearchId)
                 {
                     <button class="btn btn-primary" disabled>Booked</button>
                     <span class="muted small">This trip is booked. Search again to book another one.</span>
@@ -122,7 +118,7 @@
                     }
                     else
                     {
-                        <text>Bookings made in this browser session.</text>
+                        <text>@(Owner.Length > 0 ? "Bookings made with your account." : "Bookings made in this browser tab. Sign in to keep them.")</text>
                     }
                 </p>
             </div>
@@ -163,6 +159,7 @@
                             <th>Booking</th>
                             <th>Passenger</th>
                             <th>Route</th>
+                            <th>Travel date</th>
                             <th class="num">Paid</th>
                             <th>Booked (UTC)</th>
                         </tr>
@@ -179,6 +176,7 @@
                                 <td><code>@r.BookingId</code></td>
                                 <td>@r.PassengerName <span class="muted">(@r.Passengers)</span></td>
                                 <td class="nowrap">@UiText.Station(r.Origin) → @UiText.Station(r.Destination)</td>
+                                <td class="nowrap">@(r.TravelDate is { } day ? day.ToString("d MMM yyyy") : "—")</td>
                                 <td class="num">@UiText.Money(r.AmountPaid, r.Currency)</td>
                                 <td class="nowrap">@r.IssuedAtUtc.ToString("d MMM yyyy, HH:mm")</td>
                             </tr>
@@ -213,6 +211,18 @@
     [Parameter]
     public int PricedPassengers { get; set; }
 
+    /// <summary>Changes with every new search, but not when the same search is only priced again.</summary>
+    [Parameter]
+    public int SearchId { get; set; }
+
+    /// <summary>Travel date chosen on the planner; stored with the booking.</summary>
+    [Parameter]
+    public DateOnly TravelDate { get; set; } = DateOnly.FromDateTime(DateTime.Today);
+
+    /// <summary>User name of the signed-in account, or "" for a guest. Stored with the booking.</summary>
+    [Parameter]
+    public string Owner { get; set; } = "";
+
     /// <summary>The origin typed on the planner, used by the report.</summary>
     [Parameter]
     public string Origin { get; set; } = "";
@@ -228,18 +238,18 @@
     [CascadingParameter]
     public ViewOptions Options { get; set; } = ViewOptions.Default;
 
-    private bool IsDispatcher => Role == UserRole.DispatcherAdmin;
+    private bool IsDispatcher => Role == UserRole.Dispatcher;
 
     private JournalFormat OtherFormat =>
         State.JournalFormat == JournalFormat.Json ? JournalFormat.TextLog : JournalFormat.Json;
 
-    /// <summary>Dispatchers see every stored booking; everyone else only the bookings made in this session.</summary>
+    /// <summary>Dispatchers see every stored booking; passengers their account's bookings; guests this tab's.</summary>
     private ImmutableList<BookingReceipt> VisibleHistory =>
         IsDispatcher ? State.History : State.History.Where(CanSeeDetails).ToImmutableList();
 
     protected override void OnInitialized() => ReloadHistory();
 
-    private bool CanSeeDetails(BookingReceipt receipt) => State.CanSeeDetails(receipt, IsDispatcher);
+    private bool CanSeeDetails(BookingReceipt receipt) => State.CanSeeDetails(receipt, IsDispatcher, Owner);
 
     private void PlaceBooking()
     {
@@ -247,15 +257,28 @@
             return;
 
         // A second click on the same quote must not charge the card twice.
-        if (ReferenceEquals(State.BookedReport, Report))
+        if (State.BookedSearchId == SearchId)
             return;
 
         var journal = JournalFactory(State.JournalFormat);
-        var draft = new BookingDraft(itinerary, PricedPassengers, State.PassengerName, State.PassengerEmail);
+
+        // Check that the booking file can be read before taking any money; otherwise the payment could
+        // succeed and the booking be lost.
+        if (journal.LoadAll() is Failure<JournalContents> { Reason: var storageProblem })
+        {
+            State.Stages = ImmutableList.Create(
+                new StageView("Check booking storage", StageStatus.Failed, $"{storageProblem} You were not charged."));
+            Logger.BookingNotCompleted(storageProblem);
+            return;
+        }
+
+        var draft = new BookingDraft(itinerary, PricedPassengers, State.PassengerName, State.PassengerEmail, Owner, TravelDate);
         var trace = BookingWorkflow.Run(draft, State.PromoCode, PaymentGateway.Charge, DateTime.UtcNow);
 
         // Save only on the success track; storage problems come back as Failure too.
-        var stored = trace.Receipt.Bind(receipt => journal.Append([receipt]).Map(_ => receipt));
+        var stored = trace.Receipt
+            .Bind(receipt => journal.Append([receipt]).Map(_ => receipt))
+            .Tap(Logger.BookingOutcome);
 
         State.Stages = ImmutableList.Create(
             Stage("Check details", trace.Validated, v => $"{v.PassengerName}, {v.Email}, {UiText.Count(v.Passengers, "passenger")}", previousFailed: false),
@@ -269,10 +292,18 @@
             Stage("Save booking", stored, r => $"Booking {r.BookingId} confirmed",
                 previousFailed: !trace.Receipt.IsSuccess()));
 
+        // Once the card is charged this search is done, even if saving failed afterwards:
+        // a second click must not take the money again.
+        if (trace.Receipt is Success<BookingReceipt>)
+            State.BookedSearchId = SearchId;
+
+        if (trace.Receipt is Success<BookingReceipt> { Data: var paid } && stored is Failure<BookingReceipt>)
+            State.Stages = State.Stages.SetItem(3, new StageView("Save booking", StageStatus.Failed,
+                $"Payment {paid.TransactionId} went through but the booking could not be saved. Keep this reference; it is in the server log."));
+
         if (stored is Success<BookingReceipt> { Data: var saved })
         {
             State.OwnBookingIds.Add(saved.BookingId);
-            State.BookedReport = Report;
             State.SelectedReceipt = saved;
             AppState.AppendFeedMessage($"New booking {saved.BookingId}: {UiText.Station(saved.Origin)} → {UiText.Station(saved.Destination)}, {UiText.Money(saved.AmountPaid)}.");
         }
@@ -282,15 +313,17 @@
 
     private static StageView Stage<T>(string name, Result<T> result, Func<T, string> describe, bool previousFailed) =>
         previousFailed
-            ? new StageView(name, "Skipped", "Not run because an earlier step failed.")
+            ? new StageView(name, StageStatus.Skipped, "Not run because an earlier step failed.")
             : result.Match(
-                onSuccess: value => new StageView(name, "Done", describe(value)),
-                onFailure: reason => new StageView(name, "Failed", reason));
+                onSuccess: value => new StageView(name, StageStatus.Done, describe(value)),
+                onFailure: reason => new StageView(name, StageStatus.Failed, reason));
 
     private void ReloadHistory()
     {
         var loaded = JournalFactory(State.JournalFormat).LoadAll();
         State.HistoryError = loaded.Match(_ => (string?)null, reason => reason);
+        if (State.HistoryError is not null)
+            Logger.HistoryUnavailable(State.HistoryError);
 
         var contents = loaded.Match(c => c, _ => JournalContents.Empty);
         State.History = contents.Receipts.OrderByDescending(r => r.IssuedAtUtc).ToImmutableList();

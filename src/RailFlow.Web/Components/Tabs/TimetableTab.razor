@@ -1,8 +1,4 @@
-@* "Timetable" tab: the station-by-station timetable of the last priced search and the train's progress
-   along it. It receives that route (null when there is no priced search yet), the departure time from the
-   trip form and an OnPlanTrip callback for the empty state. Both tables are computed by pure functions in
-   RailFlow.Core whenever the route or the departure time changes, so they always match the trip on the
-   planner. *@
+@* Timetable of the last priced search from the chosen departure time, and the train's progress along it. *@
 
 @if (Route is null || _timetable.IsEmpty)
 {
@@ -21,7 +17,7 @@ else
             <div>
                 <h2>Timetable</h2>
                 <p class="card-sub">
-                    @UiText.Station(Route.Origin) → @UiText.Station(Route.Destination), departing @Departure.ToString("HH:mm").
+                    @UiText.Station(Route.Origin) → @UiText.Station(Route.Destination), departing @UiText.Day(TravelDate) at @Departure.ToString("HH:mm").
                     Trains stop for @RecursiveTimetable.DwellMinutes minutes at each change.
                 </p>
             </div>
@@ -85,7 +81,7 @@ else
                     @foreach (var step in _progress)
                     {
                         <tr>
-                            <td class="num">@Departure.AddMinutes(step.AccumulatedMinutes).ToString("HH:mm")</td>
+                            <td class="num">@ClockTime(step.AccumulatedMinutes)</td>
                             <td>@UiText.Station(step.CurrentStation)</td>
                             <td class="num">@step.ProgressKm.ToString("N0") of @step.TotalDistanceKm.ToString("N0") km</td>
                             <td>@step.LastEventDescription</td>
@@ -110,6 +106,19 @@ else
     [Parameter]
     public PlannedRoute? Route { get; set; }
 
+    // "23:50", or "00:30 +1d" after midnight.
+    private string ClockTime(int minutesAfterDeparture)
+    {
+        var total = Departure.ToTimeSpan().TotalMinutes + minutesAfterDeparture;
+        var days = (int)(total / (24 * 60));
+        var time = Departure.AddMinutes(minutesAfterDeparture).ToString("HH:mm");
+        return days > 0 ? $"{time} +{days}d" : time;
+    }
+
+    /// <summary>Travel date chosen on the trip form.</summary>
+    [Parameter]
+    public DateOnly TravelDate { get; set; } = DateOnly.FromDateTime(DateTime.Today);
+
     /// <summary>Departure time chosen on the trip form.</summary>
     [Parameter]
     public TimeOnly Departure { get; set; } = new(8, 0);
@@ -129,6 +138,6 @@ else
 
         _builtFor = (Route, Departure);
         _timetable = Route is null ? ImmutableList<TimetableStop>.Empty : RecursiveTimetable.BuildTimetable(Route, Departure);
-        _progress = Route is null ? ImmutableList<TransitSimulationState>.Empty : BenchmarkAndLoopLab.RunTransitSimulation(Route, StepMinutes);
+        _progress = Route is null ? ImmutableList<TransitSimulationState>.Empty : TrainSimulation.RunTransitSimulation(Route, StepMinutes);
     }
 }

@@ -87,7 +87,7 @@ public static class Memoization
     }
 
     /// <summary>
-    /// Thread-safe memoization with telemetry stats for UI inspection.
+    /// Thread-safe memoization that also counts hits and misses (shown in the Lab tab).
     /// </summary>
     public static MemoizedFunc<TIn, TOut> MemoizeThreadSafeWithStats<TIn, TOut>(this Func<TIn, TOut> @this)
         where TIn : notnull =>

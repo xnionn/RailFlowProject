@@ -33,7 +33,7 @@ public static class RoleNames
 
     public static string ToClaimValue(UserRole role) => role switch
     {
-        UserRole.DispatcherAdmin => Dispatcher,
+        UserRole.Dispatcher => Dispatcher,
         _ => Passenger
     };
 
@@ -42,7 +42,7 @@ public static class RoleNames
     /// </summary>
     public static UserRole FromPrincipal(ClaimsPrincipal? user) =>
         user?.Identity?.IsAuthenticated == true && user.IsInRole(Dispatcher)
-            ? UserRole.DispatcherAdmin
+            ? UserRole.Dispatcher
             : UserRole.Passenger;
 
     public static ClaimsPrincipal ToPrincipal(UserAccount account, string authenticationType) =>

@@ -5,9 +5,9 @@ namespace RailFlow.Infrastructure.Services;
 /// <summary>
 /// Stand-in for a real card processor. It is the only side effect of the booking workflow and is passed
 /// into <c>BookingWorkflow.Charge</c> as a <c>Func&lt;decimal, Result&lt;string&gt;&gt;</c> (Week 6).
-/// The Dispatcher can switch on a payment outage from the Chaos console to see the failure path.
+/// The Dispatcher can switch on a payment outage from the Dispatcher tab to see the failure path.
 /// </summary>
-public sealed class SimulatedPaymentGateway(ChaosAndTrafficController chaos)
+public sealed class SimulatedPaymentGateway(OperationsControls chaos)
 {
     public const decimal CardLimit = 10_000m;
 

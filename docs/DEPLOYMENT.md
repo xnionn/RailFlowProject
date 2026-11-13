@@ -135,8 +135,13 @@ All settings can be given in `appsettings.json`, as environment variables (`:` b
 | `ASPNETCORE_ENVIRONMENT` | `Production` (`Development` via launch profile) | `Production` | `Development` shows detailed errors; `Production` enables the `/Error` page and HSTS. |
 | `ASPNETCORE_FORWARDEDHEADERS_ENABLED` | `false` | not set | Set to `true` behind a TLS-terminating reverse proxy so the app sees the original scheme and client IP (section 6.2). |
 | `AllowedHosts` | `*` | `*` | Restrict to the public host name in production, e.g. `AllowedHosts=railflow.example.org`. |
-| `DemoUsers__{n}__UserName` / `DisplayName` / `Role` / `PasswordHash` | two demo accounts (below) | same | Sign-in accounts. `Role` is `Passenger` or `DispatcherAdmin`. |
-| `Logging__LogLevel__Default` | `Information` | `Information` | Log verbosity (logs go to the console / `docker logs`). |
+| `DemoUsers__{n}__UserName` / `DisplayName` / `Role` / `PasswordHash` | two demo accounts (below) | same | Sign-in accounts. `Role` is `Passenger` or `Dispatcher`. |
+| `Security__LoginAttemptsPerMinute` | `10` | `10` | Sign-in attempts allowed per client address per minute; more are answered with `429 Too Many Requests`. Behind a proxy, enable forwarded headers so the real client address is used. |
+| `Logging__LogLevel__Default` | `Information` | `Information` | Log verbosity (logs go to the console / `docker logs`). Failed searches are logged as errors with the exception; storage failures, rejected CSV lines and engineering-works changes as warnings or information. |
+
+`dotnet run` without a launch profile starts in `Production`; then the CSS and Blazor scripts are only served from
+publish output. For a quick local run use the launch profile (`dotnet run --project src/RailFlow.Web`) or set
+`ASPNETCORE_ENVIRONMENT=Development`.
 
 Note: inside the container the booking folder is `/app/data` (lower case) and the network folder is `/app/Data` (upper case, from the publish output). They are different folders on Linux.
 
@@ -145,7 +150,7 @@ Note: inside the container the booking folder is `/app/data` (lower case) and th
 | Index | User name | Password (demo only) | Display name | Role |
 | :--- | :--- | :--- | :--- | :--- |
 | 0 | `passenger` | `passenger-demo` | Demo Passenger | `Passenger` |
-| 1 | `dispatcher` | `dispatcher-demo` | Demo Dispatcher | `DispatcherAdmin` |
+| 1 | `dispatcher` | `dispatcher-demo` | Demo Dispatcher | `Dispatcher` |
 
 Only hashes are stored, in the format `PBKDF2-SHA256.{iterations}.{salt base64}.{hash base64}` (PBKDF2 with SHA-256, 16-byte salt, 32-byte hash, 100,000 iterations by default).
 Hashes are created by `RailFlow.Infrastructure.Security.PasswordHasher.Hash(password)`.
@@ -249,7 +254,7 @@ RailFlow is designed and tested for **one server instance**. Running several rep
 
 | State | Where it lives | Effect with more than one instance |
 | :--- | :--- | :--- |
-| Engineering works and simulated failures | `ChaosAndTrafficController`, an in-memory singleton | Each instance has its own toggles; a dispatcher change only affects users connected to the same instance. Lost on restart. |
+| Engineering works and simulated failures | `OperationsControls`, an in-memory singleton | Each instance has its own toggles; a dispatcher change only affects users connected to the same instance. Lost on restart. |
 | Live activity / advisories | controller event + SignalR `/hubs/traffic` on the same process | Only clients of the same instance receive them. |
 | Route cache (memoized BFS) | in-memory `ConcurrentDictionary` per process | Harmless (each instance warms its own cache), but cache statistics differ per instance. |
 | Undo/redo history, current role | `ImmutableAppStateContainer`, scoped to one Blazor circuit | Lost when the circuit ends (server restart, reconnect failure). |
@@ -279,7 +284,7 @@ What was actually executed while preparing this guide (Windows 11, .NET SDK 10.0
 | :--- | :--- | :--- |
 | 1 | `dotnet publish src/RailFlow.Web/RailFlow.Web.csproj -c Release` | Succeeded. Output contains `Data/stations.csv` (410 B), `Data/connections.csv` (896 B), `appsettings.json`, `wwwroot/` and `RailFlow.Web.staticwebassets.endpoints.json`. |
 | 2 | Dockerfile build stage simulated on a copy of `RailFlow.slnx` + `src/` without `bin/`, `obj/`, `App_Data/`: `dotnet restore src/RailFlow.Web/RailFlow.Web.csproj`, then `dotnet publish ... -c Release -o out/publish --no-restore /p:UseAppHost=false` | Succeeded; `Data/*.csv` present; no `RailFlow.Web.exe` app host (as intended). |
-| 3 | Published app started in `Production` on plain HTTP (port 18093), `GET /api/route-quote?from=LONDON&to=PARIS&passengers=1` | `200`, `{"status":"Something","origin":"LONDON","destination":"PARIS","distanceKm":460,"finalPrice":101.20,"currency":"€","hasRoadworks":false}` |
+| 3 | Published app started in `Production` on plain HTTP (port 18093), `GET /api/route-quote?from=LONDON&to=PARIS&passengers=1` | `200`, `{"status":"Something","origin":"LONDON","destination":"PARIS","distanceKm":460,"finalPrice":101.20,"currency":"€","hasEngineeringWorks":false}` |
 | 4 | Same, `from=LONDON&to=ATLANTIS` | `404`, `{"status":"Nothing","message":"No route or station found."}` |
 | 5 | `GET /api/bookings` without a cookie | `401` |
 | 6 | `GET /` and `GET /login` over HTTP | both `200`, no redirect; HTTPS-redirection warning logged once (section 6.1) |

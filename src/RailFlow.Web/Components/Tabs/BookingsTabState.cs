@@ -23,8 +23,11 @@ public sealed class BookingsTabState
     /// <summary>Progress of the last booking attempt. A new search clears it (see <see cref="ClearStages"/>).</summary>
     public ImmutableList<StageView> Stages { get; set; } = ImmutableList<StageView>.Empty;
 
-    /// <summary>The search result that was booked successfully; the same quote cannot be paid for twice.</summary>
-    public PipelineExecutionReport? BookedReport { get; set; }
+    /// <summary>
+    /// The search that was booked successfully. A price update for the same search (engineering works changed)
+    /// does not make it bookable again; only a new search does.
+    /// </summary>
+    public int? BookedSearchId { get; set; }
 
     // History as last loaded from the selected journal file
     public ImmutableList<BookingReceipt> History { get; set; } = ImmutableList<BookingReceipt>.Empty;
@@ -34,13 +37,18 @@ public sealed class BookingsTabState
     public BookingReceipt? SelectedReceipt { get; set; }
 
     /// <summary>
-    /// Passenger names, e-mails and full booking ids are personal data: dispatchers see all of them,
-    /// everyone else only the bookings made in their own session. The rest of the history is shown masked.
+    /// Bookings made in this browser tab. A guest has no account, so these are the only bookings a guest sees.
     /// </summary>
     public HashSet<string> OwnBookingIds { get; } = new(StringComparer.OrdinalIgnoreCase);
 
-    public bool CanSeeDetails(BookingReceipt receipt, bool isDispatcher) =>
-        isDispatcher || OwnBookingIds.Contains(receipt.BookingId);
+    /// <summary>
+    /// Passenger names, e-mails and booking ids are personal data: dispatchers see every booking, a signed-in
+    /// passenger the bookings of their account, and a guest the bookings made in this browser tab.
+    /// </summary>
+    public bool CanSeeDetails(BookingReceipt receipt, bool isDispatcher, string owner = "") =>
+        isDispatcher
+        || OwnBookingIds.Contains(receipt.BookingId)
+        || (owner.Length > 0 && string.Equals(receipt.Owner, owner, StringComparison.OrdinalIgnoreCase));
 
     public void ClearStages() => Stages = ImmutableList<StageView>.Empty;
 }

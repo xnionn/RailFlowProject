@@ -1,7 +1,4 @@
-@* Vertical, numbered list of workflow stages (used for the booking progress). Each row shows the stage
-   name with a status tag and a detail line; "Done" is coloured green and "Failed" red. It receives the
-   stages to show and renders nothing at all while the list is empty. It is the read-only sibling of
-   PipelineSteps, which shows the route pipeline horizontally and lets the user select a step. *@
+@* Numbered list of workflow stages with a status tag each (booking progress). Renders nothing when empty. *@
 
 @if (Stages.Count > 0)
 {
@@ -25,10 +22,10 @@
     [Parameter, EditorRequired]
     public IReadOnlyList<StageView> Stages { get; set; } = [];
 
-    private static string ToneFor(string status) => status switch
+    private static string ToneFor(StageStatus status) => status switch
     {
-        "Done" => "ok",
-        "Failed" => "err",
+        StageStatus.Done => "ok",
+        StageStatus.Failed => "err",
         _ => ""
     };
 }

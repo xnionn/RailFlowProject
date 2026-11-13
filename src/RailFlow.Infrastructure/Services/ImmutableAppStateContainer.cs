@@ -6,7 +6,7 @@ namespace RailFlow.Infrastructure.Services;
 public enum UserRole
 {
     Passenger,
-    DispatcherAdmin
+    Dispatcher
 }
 
 public sealed record PlannerFormSnapshot(
@@ -17,9 +17,9 @@ public sealed record PlannerFormSnapshot(
     DateTime TimestampUtc);
 
 /// <summary>
-/// Immutable State Container for Blazor State Management.
-/// Stores state history as an ImmutableStack<PlannerFormSnapshot> supporting instant Time-Travel Undo/Redo,
-/// plus Role-Based Access Control (RBAC) state and real-time SignalR/event notifications.
+/// Per-session state of the planner (one instance per browser tab): the search history as two immutable
+/// stacks for Undo/Redo, the signed-in role and the activity feed. Every change replaces a value instead of
+/// mutating it, and raises OnStateChanged so the page re-renders.
 /// </summary>
 public sealed class ImmutableAppStateContainer
 {
@@ -35,15 +35,24 @@ public sealed class ImmutableAppStateContainer
 
     public UserRole CurrentRole { get; private set; } = UserRole.Passenger;
 
-    public ImmutableList<string> LiveSignalRFeed { get; private set; } = ImmutableList.Create(
-        $"[{DateTime.UtcNow:HH:mm:ss}] Session started.",
-        $"[{DateTime.UtcNow:HH:mm:ss}] Engineering works at Frankfurt and Lyon: +10% on connections to those stations.");
+    public ImmutableList<string> ActivityFeed { get; private set; }
+
+    /// <param name="operations">The shared dispatcher settings; the feed starts with the engineering works in force now.</param>
+    public ImmutableAppStateContainer(OperationsControls? operations = null)
+    {
+        var now = $"[{DateTime.UtcNow:HH:mm:ss}] ";
+        var works = operations?.StationsWithEngineeringWorks.Select(StationNames.Display).Order().ToList() ?? [];
+        ActivityFeed = ImmutableList.Create(
+            now + "Session started.",
+            now + (works.Count == 0
+                ? "No engineering works at the moment."
+                : $"Engineering works at {string.Join(", ", works)}: +{(operations!.EngineeringWorksMultiplier - 1) * 100:0}% on connections to those stations."));
+    }
 
     public event Action? OnStateChanged;
 
     public bool CanUndo => !_undoStack.IsEmpty;
     public bool CanRedo => !_redoStack.IsEmpty;
-    public int UndoDepth => _undoStack.Count();
 
     public void CommitSnapshot(PlannerFormSnapshot nextSnapshot)
     {
@@ -83,16 +92,16 @@ public sealed class ImmutableAppStateContainer
     {
         if (CurrentRole == role) return;
         CurrentRole = role;
-        AppendFeedMessage(role == UserRole.DispatcherAdmin ? "Signed in as dispatcher." : "Signed in as passenger.");
+        AppendFeedMessage(role == UserRole.Dispatcher ? "Signed in as dispatcher." : "Signed in as passenger.");
     }
 
     public void AppendFeedMessage(string message)
     {
         var stamped = $"[{DateTime.UtcNow:HH:mm:ss}] {message}";
-        LiveSignalRFeed = LiveSignalRFeed.Insert(0, stamped);
-        if (LiveSignalRFeed.Count > 15)
+        ActivityFeed = ActivityFeed.Insert(0, stamped);
+        if (ActivityFeed.Count > 15)
         {
-            LiveSignalRFeed = LiveSignalRFeed.Take(15).ToImmutableList();
+            ActivityFeed = ActivityFeed.Take(15).ToImmutableList();
         }
         NotifyStateChanged();
     }

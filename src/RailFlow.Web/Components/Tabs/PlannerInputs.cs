@@ -6,7 +6,7 @@ namespace RailFlow.Web.Components.Tabs;
 /// <summary>
 /// The fields of the trip form. Home keeps the only instance, because other tabs use them too (the timetable
 /// starts at the chosen departure time); PlanTab binds its inputs straight to it. Undo and Redo load a stored
-/// snapshot back into it. The departure time is not part of the Undo history: it does not change the price.
+/// snapshot back into it. The travel date and departure time are not part of the Undo history: they do not change the price.
 /// </summary>
 public sealed class PlannerInputs
 {
@@ -14,6 +14,7 @@ public sealed class PlannerInputs
     public string Destination { get; set; } = "ZURICH";
     public int Passengers { get; set; } = 2;
     public TimeOnly Departure { get; set; } = new(8, 0);
+    public DateOnly TravelDate { get; set; } = DateOnly.FromDateTime(DateTime.Today.AddDays(1));
 
     // The form shows station names ("London"); the search and the history keep the codes ("LONDON").
     public string OriginName
@@ -47,9 +48,9 @@ public sealed class PlannerInputs
     {
         "DayTripSingle" => new StandardDayTrip("Single ticket", "One-way rail fare", false),
         "DayTripReturn" => new StandardDayTrip("Return ticket", "Return journey at 65% of the outbound fare", true),
-        "HolidayComfort" => new RailHoliday("City break", "3 nights in a 4-star hotel", new HotelNights(3), "Comfort 4-Star"),
-        "HolidayLuxury" => new RailHoliday("Grand tour", "5 nights in a 5-star hotel", new HotelNights(5), "Luxury 5-Star"),
-        _ => new RailHolidayWithMeals("Alpine package", "4 nights with full board and lounge access", new HotelNights(4), "Alpine Boutique", "Full board", true)
+        "HolidayComfort" => new RailHoliday("City break", "3 nights in a 4-star hotel", new HotelNights(3), HotelTier.Comfort),
+        "HolidayLuxury" => new RailHoliday("Grand tour", "5 nights in a 5-star hotel", new HotelNights(5), HotelTier.Luxury),
+        _ => new RailHolidayWithMeals("Alpine package", "4 nights with full board and lounge access", new HotelNights(4), HotelTier.Boutique, "Full board", true)
     };
 
     public void SwapStations() => (Origin, Destination) = (Destination, Origin);

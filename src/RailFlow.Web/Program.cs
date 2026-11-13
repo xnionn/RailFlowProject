@@ -1,14 +1,18 @@
 using System.Globalization;
+using System.Threading.RateLimiting;
 using RailFlow.Core.Domain;
 using RailFlow.Core.Functional;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.SignalR;
 using RailFlow.Infrastructure.Security;
 using RailFlow.Infrastructure.Services;
 using RailFlow.Infrastructure.Storage;
+using RailFlow.Web;
 using RailFlow.Web.Components;
 using RailFlow.Web.Hubs;
 
@@ -27,7 +31,7 @@ var networkDataDirectory = builder.Configuration["Storage:NetworkDataDirectory"]
 var bookingStorageDirectory = builder.Configuration["Storage:BookingDirectory"]
     ?? Path.Combine(builder.Environment.ContentRootPath, "App_Data");
 
-// Add Blazor Interactive Server & SignalR
+// Blazor Interactive Server and SignalR
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 builder.Services.AddSignalR();
@@ -60,9 +64,26 @@ builder.Services.AddDataProtection()
 
 builder.Services.AddHealthChecks();
 
-// Register Functional Core & Imperative Shell Services
-builder.Services.AddSingleton<ChaosAndTrafficController>();
-builder.Services.AddSingleton(_ => NetworkDataLoader.LoadOrEmbedded(networkDataDirectory));
+// Errors for API clients (for example a missing or non-numeric parameter) are written as problem details JSON.
+builder.Services.AddProblemDetails();
+
+// Sign-in attempts are limited per client address, so passwords cannot be guessed at full speed.
+var loginAttemptsPerMinute = builder.Configuration.GetValue("Security:LoginAttemptsPerMinute", 10);
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+        HttpMethods.IsPost(context.Request.Method) && context.Request.Path.StartsWithSegments("/login")
+            ? RateLimitPartition.GetFixedWindowLimiter(
+                context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                _ => new FixedWindowRateLimiterOptions { PermitLimit = loginAttemptsPerMinute, Window = TimeSpan.FromMinutes(1) })
+            : RateLimitPartition.GetNoLimiter("other"));
+});
+
+// Route search and pricing: pure pipeline in Core, services in Infrastructure
+builder.Services.AddSingleton<OperationsControls>();
+builder.Services.AddSingleton(sp => NetworkDataLoader.LoadOrEmbedded(networkDataDirectory)
+    .Tap(sp.GetRequiredService<ILoggerFactory>().CreateLogger("RailFlow.Network").NetworkData));
 builder.Services.AddSingleton<RailMappingSystem>();
 builder.Services.AddSingleton<IMappingSystem>(sp => sp.GetRequiredService<RailMappingSystem>());
 builder.Services.AddSingleton<RailRoutePlanner>();
@@ -75,7 +96,7 @@ builder.Services.AddSingleton<RailwayPipelineOrchestrator>();
 builder.Services.AddSingleton<SimulatedPaymentGateway>();
 builder.Services.AddSingleton<Func<JournalFormat, IBookingJournal>>(_ => BookingJournalFactory.ForDirectory(bookingStorageDirectory));
 
-// Scoped Immutable State Container with Time-Travel Undo/Redo per user circuit
+// One state container per browser tab (Blazor circuit): search history for Undo/Redo, role and activity feed
 builder.Services.AddScoped<ImmutableAppStateContainer>();
 
 var app = builder.Build();
@@ -87,9 +108,13 @@ if (!app.Environment.IsDevelopment())
 }
 
 // Friendly HTML error pages for the browser only; API clients get the bare status code (401, 403, 404...).
-app.UseWhen(
-    context => !context.Request.Path.StartsWithSegments("/api"),
-    branch => branch.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true));
+app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
+app.Use((context, next) =>
+{
+    if (context.Request.Path.StartsWithSegments("/api") && context.Features.Get<IStatusCodePagesFeature>() is { } pages)
+        pages.Enabled = false;
+    return next(context);
+});
 app.UseHttpsRedirection();
 app.UseRequestLocalization(new RequestLocalizationOptions
 {
@@ -97,6 +122,7 @@ app.UseRequestLocalization(new RequestLocalizationOptions
     SupportedCultures = [displayCulture],
     SupportedUICultures = [displayCulture]
 });
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseAntiforgery();
@@ -106,23 +132,30 @@ app.MapStaticAssets();
 // Liveness probe for Docker / hosting platforms.
 app.MapHealthChecks("/healthz");
 
-// Map SignalR Real-Time Telemetry Hub
+// SignalR hub for engineering-works updates and announcements
 app.MapHub<TrafficHub>("/hubs/traffic");
 
 // Every traffic alert (from the Blazor UI or from a hub client) is pushed to all connected hub clients.
 var trafficHub = app.Services.GetRequiredService<IHubContext<TrafficHub>>();
-app.Services.GetRequiredService<ChaosAndTrafficController>().OnTrafficAlertBroadcast +=
+app.Services.GetRequiredService<OperationsControls>().OnTrafficAlertBroadcast +=
     message => _ = trafficHub.Clients.All.SendAsync("ReceiveAdvisory", message);
 
-// Minimal API health & functional pipeline endpoint for external integration
+// Price of a single ticket for other programs. The input goes through the same validation gate as the planner form,
+// so a request the UI would refuse (same station, 0 or 1000 passengers) gets 400 here too.
 app.MapGet("/api/route-quote", (
     string from,
     string to,
     int passengers,
-    RailwayPipelineOrchestrator orchestrator) =>
+    RailwayPipelineOrchestrator orchestrator,
+    ILoggerFactory loggers) =>
 {
-    var offering = new StandardDayTrip("Standard Express", "Direct point-to-point rail ticket", false);
-    var report = orchestrator.ExecutePipeline(from, to, offering, passengers <= 0 ? 1 : passengers);
+    var offering = new StandardDayTrip("Single ticket", "One-way rail fare", false);
+    var validation = RailwayPipelineOrchestrator.ValidateInput(from, to, passengers, offering);
+    if (validation is not ValidRouteQuery query)
+        return InvalidQuote(validation);
+
+    var report = orchestrator.ExecutePipeline(query.Origin, query.Destination, query.Offering, query.Passengers)
+        .Tap(r => loggers.CreateLogger("RailFlow.Api").SearchOutcome(r, query.Origin, query.Destination));
     return report.Outcome switch
     {
         Something<PricedItinerary> { InnerValue: var itinerary } => Results.Ok(new
@@ -133,10 +166,10 @@ app.MapGet("/api/route-quote", (
             distanceKm = itinerary.TrafficRoute.Route.TotalDistanceKm,
             finalPrice = itinerary.FinalPrice,
             currency = itinerary.Currency,
-            hasRoadworks = itinerary.TrafficRoute.HasRoadworksOrTrackMaintenance
+            hasEngineeringWorks = itinerary.TrafficRoute.HasEngineeringWorks
         }),
         Nothing<PricedItinerary> => Results.NotFound(new { status = "Nothing", message = "No route or station found." }),
-        Error<PricedItinerary> { ErrorDetails: var ex } => Results.Problem(detail: ex.Message, title: "Pipeline Error<T>"),
+        Error<PricedItinerary> { ErrorDetails: var ex } => Results.Problem(detail: ex.Message, title: "Route search failed"),
         _ => Results.StatusCode(500)
     };
 });
@@ -181,13 +214,27 @@ app.MapGet("/api/bookings/{bookingId}/ticket", (
         return Results.NotFound(new { status = "Nothing", message = $"Booking '{bookingId}' was not found." });
 
     var (contentType, _) = TicketExportFactory.Describe(chosen);
-    return Results.Text(TicketExportFactory.Create(chosen)(receipt), contentType);
+    return Results.Text(TicketExportFactory.Create(chosen)(receipt), contentType, System.Text.Encoding.UTF8);
 }).RequireAuthorization(policy => policy.RequireRole(RoleNames.Dispatcher));
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
 app.Run();
+
+static IResult InvalidQuote(ValidatedUserInput invalid) => invalid switch
+{
+    EmptyRouteQuery { FieldName: var field } =>
+        Results.ValidationProblem(new Dictionary<string, string[]>
+        {
+            [field.StartsWith("Origin") ? "from" : "to"] = [$"{field} is required."]
+        }),
+    SameStationError { Station: var station } =>
+        Results.ValidationProblem(new Dictionary<string, string[]> { ["to"] = [$"From and to are the same station ({station})."] }),
+    InvalidPassengerCount { AttemptedCount: var count } =>
+        Results.ValidationProblem(new Dictionary<string, string[]> { ["passengers"] = [$"Passengers must be between 1 and 50 (got {count})."] }),
+    _ => Results.BadRequest()
+};
 
 static Task RespondOrRedirect(RedirectContext<CookieAuthenticationOptions> context, int apiStatusCode)
 {

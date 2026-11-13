@@ -50,10 +50,10 @@ public sealed class ComponentTests : BunitContext
 
     private static ImmutableList<PipelineStepDiagnostic> FourSteps() =>
     [
-        new("Resolve stations", "Something", "LONDON, PARIS", 1),
-        new("Plan route", "Nothing", "No connection", 2),
-        new("Check traffic", "Error", "Timeout", 3),
-        new("Price ticket", "Skipped", "Not run", 0)
+        new("Resolve stations", StepStatus.Something, "LONDON, PARIS", 1),
+        new("Plan route", StepStatus.Nothing, "No connection", 2),
+        new("Check traffic", StepStatus.Error, "Timeout", 3),
+        new("Price ticket", StepStatus.Skipped, "Not run", 0)
     ];
 
     [Fact]
@@ -83,12 +83,16 @@ public sealed class ComponentTests : BunitContext
     }
 
     [Fact]
-    public void PipelineSteps_UnknownStatus_IsShownAsSkipped()
+    public void PipelineSteps_EveryStatusHasItsOwnLabel()
     {
-        var cut = Render<PipelineSteps>(p => p.Add(c => c.Diagnostics,
-            ImmutableList.Create(new PipelineStepDiagnostic("Odd step", "SomethingElse", "", 0))));
+        var steps = Enum.GetValues<StepStatus>()
+            .Select(status => new PipelineStepDiagnostic(status.ToString(), status, "", 0))
+            .ToImmutableList();
 
-        Assert.StartsWith("Skipped", cut.Find(".step-detail").TextContent);
+        var cut = Render<PipelineSteps>(p => p.Add(c => c.Diagnostics, steps));
+
+        var labels = cut.FindAll(".step-detail").Select(d => d.TextContent.Split(" · ")[0]).ToList();
+        Assert.Equal(steps.Count, labels.Distinct().Count());
     }
 
     [Fact]
@@ -198,7 +202,7 @@ public sealed class ComponentTests : BunitContext
         var cut = Render<MaybeView<string>>(p => p
             .Add(c => c.State, new UnhandledError<string>(new InvalidOperationException("Simulated outage")))
             .Add(c => c.OnRetry, () => retried++)
-            .AddCascadingValue(UserRole.DispatcherAdmin));
+            .AddCascadingValue(UserRole.Dispatcher));
 
         var button = cut.Find("button");
         Assert.Equal("Clear simulated failures and retry", button.TextContent);
@@ -214,7 +218,7 @@ public sealed class ComponentTests : BunitContext
     {
         var cut = Render<MaybeView<string>>(p => p
             .Add(c => c.State, new Error<string>(new Exception("Broken")))
-            .AddCascadingValue(UserRole.DispatcherAdmin));
+            .AddCascadingValue(UserRole.Dispatcher));
 
         Assert.Empty(cut.FindAll("button"));
         Assert.Contains("Please try again later.", cut.Markup);

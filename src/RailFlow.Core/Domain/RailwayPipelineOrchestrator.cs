@@ -3,9 +3,18 @@ using RailFlow.Core.Functional;
 
 namespace RailFlow.Core.Domain;
 
+/// <summary>What a pipeline step returned: one of the Maybe cases, or Skipped when an earlier step had no value.</summary>
+public enum StepStatus
+{
+    Something,
+    Nothing,
+    Error,
+    Skipped
+}
+
 public sealed record PipelineStepDiagnostic(
     string StepName,
-    string Status, // "Something", "Nothing", "Error", "Skipped"
+    StepStatus Status,
     string DetailMessage,
     double DurationMs);
 
@@ -44,7 +53,7 @@ public sealed class RailwayPipelineOrchestrator(
 
     /// <summary>
     /// Railway-oriented composition:
-    /// FindLocation(start) -> Bind(PlanRoute) -> Bind(CheckForRoadworks) -> Bind(CalculatePrice).
+    /// FindLocation(start) -> Bind(PlanRoute) -> Bind(CheckEngineeringWorks) -> Bind(CalculatePrice).
     /// The business steps are pure; timing each step (Stopwatch) and collecting the log lines for the UI
     /// are the only side effects, and they stay inside this method.
     /// </summary>
@@ -59,7 +68,7 @@ public sealed class RailwayPipelineOrchestrator(
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        // Step 1: Resolve Start & End Coordinates via IMappingSystem
+        // 1. Look up both stations
         var t0 = sw.Elapsed.TotalMilliseconds;
         var startMaybe = mappingSystem.FindLocation(startPlace);
         var endMaybe = mappingSystem.FindLocation(endPlace);
@@ -71,7 +80,7 @@ public sealed class RailwayPipelineOrchestrator(
             c => $"{c.Start.StationCode} ({c.Start.Latitude:F2}, {c.Start.Longitude:F2}) and {c.End.StationCode} ({c.End.Latitude:F2}, {c.End.Longitude:F2}) found",
             t1 - t0, diagnostics);
 
-        // Step 2: Plan Route via IRoutePlanner
+        // 2. Find the shortest route between them
         var t2Start = sw.Elapsed.TotalMilliseconds;
         var plannedMaybe = coordsMaybe.Bind(c => routePlanner.PlanRoute(c.Start, c.End));
         var t2End = sw.Elapsed.TotalMilliseconds;
@@ -80,18 +89,18 @@ public sealed class RailwayPipelineOrchestrator(
             r => $"{r.Segments.Count} segment(s), {r.TotalDistanceKm:F1} km, ~{r.EstimatedMinutes} min",
             t2End - t2Start, diagnostics, skipped: coordsMaybe is not Something<(GeoCoord, GeoCoord)>);
 
-        // Step 3: Check Traffic / Roadworks via ITrafficMonitor
+        // 3. Mark the sections with engineering works
         var t3Start = sw.Elapsed.TotalMilliseconds;
-        var trafficMaybe = plannedMaybe.Bind(trafficMonitor.CheckForRoadworks);
+        var trafficMaybe = plannedMaybe.Bind(trafficMonitor.CheckEngineeringWorks);
         var t3End = sw.Elapsed.TotalMilliseconds;
 
         RecordStep("Check engineering works", trafficMaybe,
-            t => t.HasRoadworksOrTrackMaintenance
+            t => t.HasEngineeringWorks
                 ? $"Engineering works on {t.AffectedDistanceKm:N0} km of the route"
                 : "No engineering works on the route",
             t3End - t3Start, diagnostics, skipped: plannedMaybe is not Something<PlannedRoute>);
 
-        // Step 4: Calculate Final Price via IPricingCalculator
+        // 4. Price the trip
         var t4Start = sw.Elapsed.TotalMilliseconds;
         var priceMaybe = trafficMaybe
             .Bind(rt => pricingCalculator.CalculatePrice(rt, offering, passengers))
@@ -101,7 +110,7 @@ public sealed class RailwayPipelineOrchestrator(
         var t4End = sw.Elapsed.TotalMilliseconds;
 
         RecordStep("Calculate fare", priceMaybe,
-            p => $"Total {p.Currency}{p.FinalPrice:F2} (base {p.Currency}{p.BaseFare:F2}, works +{p.Currency}{p.RoadworksSurcharge:F2}, package +{p.Currency}{p.OfferingAddon:F2})",
+            p => $"Total {p.Currency}{p.FinalPrice:F2} (base {p.Currency}{p.BaseFare:F2}, works +{p.Currency}{p.EngineeringWorksSurcharge:F2}, package +{p.Currency}{p.OfferingAddon:F2})",
             t4End - t4Start, diagnostics, skipped: trafficMaybe is not Something<RouteWithTraffic>);
 
         return new PipelineExecutionReport(
@@ -120,16 +129,16 @@ public sealed class RailwayPipelineOrchestrator(
     {
         if (skipped)
         {
-            list.Add(new PipelineStepDiagnostic(stepName, "Skipped", "Not run: an earlier step returned no value.", 0.0));
+            list.Add(new PipelineStepDiagnostic(stepName, StepStatus.Skipped, "Not run: an earlier step returned no value.", 0.0));
             return;
         }
 
         var (status, detail) = result switch
         {
-            Something<T> { InnerValue: { } val } => ("Something", formatter(val)),
-            Nothing<T> => ("Nothing", "No matching data."),
-            Error<T> { ErrorDetails: var ex } => ("Error", ex.Message),
-            _ => ("Nothing", "No value.")
+            Something<T> { InnerValue: { } val } => (StepStatus.Something, formatter(val)),
+            Nothing<T> => (StepStatus.Nothing, "No matching data."),
+            Error<T> { ErrorDetails: var ex } => (StepStatus.Error, ex.Message),
+            _ => (StepStatus.Nothing, "No value.")
         };
 
         list.Add(new PipelineStepDiagnostic(stepName, status, detail, Math.Round(durationMs, 3)));

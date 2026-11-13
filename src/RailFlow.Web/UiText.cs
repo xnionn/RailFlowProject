@@ -15,6 +15,9 @@ public static class UiText
     /// <summary>Station codes are stored in capitals (LONDON); people read them as names (London).</summary>
     public static string Station(string code) => StationNames.Display(code);
 
+    /// <summary>"Fri 14 Nov 2026".</summary>
+    public static string Day(DateOnly day) => day.ToString("ddd d MMM yyyy");
+
     /// <summary>"45 min", "2 h 05 min".</summary>
     public static string Duration(int minutes) =>
         minutes < 60 ? $"{minutes} min" : $"{minutes / 60} h {minutes % 60:00} min";

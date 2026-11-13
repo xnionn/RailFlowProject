@@ -153,7 +153,7 @@ public class RailFlowFunctionalTests
     [Fact]
     public void TransitGraphEngine_FindsShortestPathAndCachesRepeatedLookups()
     {
-        var chaos = new ChaosAndTrafficController();
+        var chaos = new OperationsControls();
         var planner = new RailRoutePlanner(chaos);
         planner.GraphEngine.ClearCache();
 
@@ -178,9 +178,9 @@ public class RailFlowFunctionalTests
     // --- 6. End-to-End Worked Route-Pricing Pipeline & State Container (Lectures L5_1, L6_1, L9_1) ---
 
     [Fact]
-    public void EndToEndPipeline_CalculatesRoadworksMultiplierAndCustomerOfferingUnion()
+    public void EndToEndPipeline_AppliesEngineeringWorksAndCustomerOfferingUnion()
     {
-        var chaos = new ChaosAndTrafficController(); // LYON & FRANKFURT have roadworks by default (1.10x)
+        var chaos = new OperationsControls(); // LYON & FRANKFURT have engineering works by default (1.10x)
         var mapping = new RailMappingSystem(chaos);
         var planner = new RailRoutePlanner(chaos);
         var traffic = new RailTrafficMonitor(chaos);
@@ -191,23 +191,23 @@ public class RailFlowFunctionalTests
             "Alpine Gourmet",
             "4 Nights + Dining",
             new HotelNights(4),
-            "Alpine",
+            HotelTier.Boutique,
             "Full Board",
             true);
 
         var report = orchestrator.ExecutePipeline("LONDON", "ZURICH", offering, passengers: 2);
 
         var itinerary = Assert.IsType<Something<PricedItinerary>>(report.Outcome).InnerValue!;
-        Assert.True(itinerary.TrafficRoute.HasRoadworksOrTrackMaintenance);
-        Assert.True(itinerary.RoadworksSurcharge > 0m);
+        Assert.True(itinerary.TrafficRoute.HasEngineeringWorks);
+        Assert.True(itinerary.EngineeringWorksSurcharge > 0m);
         Assert.True(itinerary.FinalPrice > itinerary.BaseFare);
         Assert.Equal(4, report.Diagnostics.Count);
     }
 
     [Fact]
-    public void EndToEndPipeline_ShortCircuitsCleanlyOnUnknownStationOrChaosFault()
+    public void EndToEndPipeline_ShortCircuitsOnUnknownStationOrSimulatedFailure()
     {
-        var chaos = new ChaosAndTrafficController();
+        var chaos = new OperationsControls();
         var mapping = new RailMappingSystem(chaos);
         var planner = new RailRoutePlanner(chaos);
         var traffic = new RailTrafficMonitor(chaos);
@@ -218,14 +218,14 @@ public class RailFlowFunctionalTests
         // 1. Unknown station -> Nothing<PricedItinerary>
         var nothingReport = orchestrator.ExecutePipeline("LONDON", "ATLANTIS", offering, 1);
         Assert.IsAssignableFrom<Nothing<PricedItinerary>>(nothingReport.Outcome);
-        Assert.Equal("Skipped", nothingReport.Diagnostics[1].Status);
+        Assert.Equal(StepStatus.Skipped, nothingReport.Diagnostics[1].Status);
 
-        // 2. Chaos fault in TrafficMonitor -> Error<PricedItinerary>
+        // 2. Simulated failure of the engineering-works monitor -> Error<PricedItinerary>
         chaos.SimulateTrafficMonitorCrash = true;
         var errorReport = orchestrator.ExecutePipeline("LONDON", "PARIS", offering, 1);
         Assert.IsAssignableFrom<Error<PricedItinerary>>(errorReport.Outcome);
-        Assert.Equal("Error", errorReport.Diagnostics[2].Status);
-        Assert.Equal("Skipped", errorReport.Diagnostics[3].Status);
+        Assert.Equal(StepStatus.Error, errorReport.Diagnostics[2].Status);
+        Assert.Equal(StepStatus.Skipped, errorReport.Diagnostics[3].Status);
     }
 
     [Fact]

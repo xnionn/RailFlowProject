@@ -9,13 +9,14 @@ namespace RailFlow.Web.Hubs;
 /// SignalR hub for real-time engineering-works advisories. Anyone may connect and listen;
 /// only signed-in dispatchers may change anything. The role is read from the auth cookie, not from the caller.
 /// </summary>
-public sealed class TrafficHub(ChaosAndTrafficController chaosController) : Hub
+public sealed class TrafficHub(OperationsControls operations, ILogger<TrafficHub> logger) : Hub
 {
     [Authorize(Roles = RoleNames.Dispatcher)]
-    public async Task ToggleStationRoadworks(string stationCode)
+    public async Task ToggleEngineeringWorks(string stationCode)
     {
-        chaosController.ToggleRoadworks(stationCode, ActorName());
-        await Clients.All.SendAsync("ReceiveTrafficUpdate", stationCode, chaosController.HasRoadworksAt(stationCode));
+        operations.ToggleEngineeringWorks(stationCode, ActorName());
+        logger.EngineeringWorksChanged(ActorName(), stationCode, operations.HasEngineeringWorksAt(stationCode) ? "on" : "off");
+        await Clients.All.SendAsync("ReceiveTrafficUpdate", stationCode, operations.HasEngineeringWorksAt(stationCode));
     }
 
     /// <summary>
@@ -25,7 +26,7 @@ public sealed class TrafficHub(ChaosAndTrafficController chaosController) : Hub
     [Authorize(Roles = RoleNames.Dispatcher)]
     public Task BroadcastAdvisory(string advisoryText)
     {
-        chaosController.BroadcastCustomAdvisory($"{ActorName()}: {advisoryText}");
+        operations.BroadcastCustomAdvisory($"{ActorName()}: {advisoryText}");
         return Task.CompletedTask;
     }
 

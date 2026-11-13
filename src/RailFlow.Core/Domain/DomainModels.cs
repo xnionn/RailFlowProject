@@ -3,7 +3,7 @@ using RailFlow.Core.Functional;
 
 namespace RailFlow.Core.Domain;
 
-// --- Worked Route-Pricing Domain Records ---
+// --- Records of the route-pricing pipeline ---
 
 public sealed record GeoCoord(double Latitude, double Longitude, string StationCode);
 
@@ -27,8 +27,8 @@ public sealed record PlannedRoute(
 /// </summary>
 public sealed record RouteWithTraffic(
     PlannedRoute Route,
-    bool HasRoadworksOrTrackMaintenance,
-    double DelaySeverityMultiplier,
+    bool HasEngineeringWorks,
+    double FareMultiplier,
     string TrafficAdvisory,
     double AffectedDistanceKm = 0.0);
 
@@ -36,7 +36,7 @@ public sealed record PricedItinerary(
     RouteWithTraffic TrafficRoute,
     CustomerOffering Offering,
     decimal BaseFare,
-    decimal RoadworksSurcharge,
+    decimal EngineeringWorksSurcharge,
     decimal OfferingAddon,
     decimal FinalPrice,
     string Currency,
@@ -54,17 +54,24 @@ public sealed record RailHoliday(
     string Title,
     string Description,
     HotelNights Nights,
-    string HotelTier) : CustomerOffering(Title, Description);
+    HotelTier Tier) : CustomerOffering(Title, Description);
 
 public sealed record RailHolidayWithMeals(
     string Title,
     string Description,
     HotelNights Nights,
-    string HotelTier,
+    HotelTier Tier,
     string DiningPlan,
     bool LoungeAccess) : CustomerOffering(Title, Description);
 
 public readonly record struct HotelNights(int Value);
+
+public enum HotelTier
+{
+    Comfort,
+    Luxury,
+    Boutique
+}
 
 // --- Discriminated Union: UserInput Validation ---
 public abstract record ValidatedUserInput;
@@ -87,7 +94,7 @@ public interface IRoutePlanner
 
 public interface ITrafficMonitor
 {
-    Maybe<RouteWithTraffic> CheckForRoadworks(PlannedRoute route);
+    Maybe<RouteWithTraffic> CheckEngineeringWorks(PlannedRoute route);
 }
 
 public interface IPricingCalculator

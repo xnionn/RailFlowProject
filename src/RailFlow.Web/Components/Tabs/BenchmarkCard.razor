@@ -1,8 +1,4 @@
-@* Benchmark card of the Lab tab: the same calculation over a 25,000-character signal written six ways
-   (foreach, LINQ, the Fork combinator, IterateUntil, a custom IEnumerable), with average times, the fastest
-   row highlighted and a bar for the relative time. It receives the last results as a two-way parameter
-   (Entries / EntriesChanged) so the caller can keep them between visits. The benchmark takes a moment, so it
-   only runs when the card first appears with no results, or when the user clicks "Run again". *@
+@* Lab: one calculation written six ways, timed. Runs on first show or on "Run again"; results are kept by the caller. *@
 
 <section class="card">
     <div class="card-head">
@@ -37,7 +33,7 @@
                             <span class="bar" style="width:@BarWidth(b)%"></span>
                         </td>
                         <td class="num">@b.RelativeRatio.ToString("0.00")×</td>
-                        <td class="muted">@b.ArchitecturalNote</td>
+                        <td class="muted">@b.Note</td>
                     </tr>
                 }
             </tbody>
@@ -73,7 +69,7 @@
     private Task RunLiveBenchmarks()
     {
         // Shown straight away, and handed to the caller so the next visit does not run it again.
-        Entries = BenchmarkAndLoopLab.RunElevationTelemetryBenchmark(25_000);
+        Entries = BenchmarkAndLoopLab.RunLoopBenchmark(25_000);
         return EntriesChanged.InvokeAsync(Entries);
     }
 }

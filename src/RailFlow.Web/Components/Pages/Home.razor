@@ -2,8 +2,10 @@
 @rendermode InteractiveServer
 @implements IDisposable
 @inject RailwayPipelineOrchestrator Orchestrator
-@inject ChaosAndTrafficController ChaosController
+@inject OperationsControls Operations
 @inject ImmutableAppStateContainer AppState
+@inject ILogger<Home> Logger
+@inject NavigationManager Navigation
 
 @* The single page of the app. It owns what more than one tab needs: the signed-in user and role, the
    trip search (form, validation, last report, Undo/Redo) and the per-session state of the tabs, which
@@ -62,9 +64,14 @@
                     @foreach (var tab in group)
                     {
                         var id = tab.Id;
-                        <button role="tab" class="tab @(_activeTab == id ? "active" : "")"
-                                aria-selected="@(_activeTab == id ? "true" : "false")"
-                                @onclick="() => OpenTab(id)">
+                        var active = _activeTab == id;
+                        <button role="tab" id="tab-@id" class="tab @(active ? "active" : "")"
+                                aria-selected="@(active ? "true" : "false")"
+                                aria-controls="tab-panel"
+                                tabindex="@(active ? 0 : -1)"
+                                @ref="_tabButtons[id]"
+                                @onclick="() => OpenTab(id)"
+                                @onkeydown="e => OnTabKey(e, id)">
                             @tab.Title
                         </button>
                     }
@@ -73,12 +80,14 @@
         </div>
     </header>
 
-    <main class="container page">
+    <main class="container page" role="tabpanel" id="tab-panel" aria-labelledby="tab-@_activeTab">
         @switch (_activeTab)
         {
             case "plan":
                 <PlanTab Inputs="_inputs"
                          Report="_lastReport"
+                         SearchedFrom="@_lastQuery?.Origin"
+                         SearchedTo="@_lastQuery?.Destination"
                          PricedPassengers="_pricedPassengers"
                          ValidationWarning="@_validationWarning"
                          @bind-SelectedStep="_selectedStep"
@@ -89,7 +98,7 @@
                          OnRedo="HandleRedo"
                          OnUnknownStationDemo="TriggerNothingDemo"
                          OnServiceFailureDemo="TriggerErrorDemo"
-                         OnRetry="ResetChaosAndReExecute"
+                         OnRetry="ClearFailuresAndSearchAgain"
                          OnRestoreValidStations="RestoreValidStations"
                          OnBookTrip='() => OpenTab("bookings")'
                          OnViewTimetable='() => OpenTab("timetable")' />
@@ -101,12 +110,15 @@
                              State="_bookings"
                              Report="_lastReport"
                              PricedPassengers="_pricedPassengers"
+                             SearchId="_searchId"
+                             TravelDate="_inputs.TravelDate"
+                             Owner="@_userName"
                              Origin="@_inputs.Origin"
                              OnPlanTrip='() => OpenTab("plan")' />
                 break;
 
             case "timetable":
-                <TimetableTab Route="PricedRoute" Departure="_inputs.Departure" OnPlanTrip='() => OpenTab("plan")' />
+                <TimetableTab Route="PricedRoute" TravelDate="_inputs.TravelDate" Departure="_inputs.Departure" OnPlanTrip='() => OpenTab("plan")' />
                 break;
 
             case "network":
@@ -114,9 +126,8 @@
                 break;
 
             case "dispatcher":
-                <DispatcherTab Feed="AppState.LiveSignalRFeed"
-                               SignedInName="@_signedInName"
-                               OnRoadworksChanged="RepriceLastSearch" />
+                <DispatcherTab Feed="AppState.ActivityFeed"
+                               SignedInName="@_signedInName" />
                 break;
 
             case "lab":
@@ -156,7 +167,13 @@
             .Concat(IsDispatcher ? DispatcherTabs : [])
             .Concat(_viewOptions.ShowCourseNotes ? CourseTabs : []);
 
+    // The open tab is part of the address (?tab=bookings), so links, reload and the browser's Back button work.
+    [SupplyParameterFromQuery(Name = "tab")]
+    public string? Tab { get; set; }
+
     private string _activeTab = "plan";
+    private readonly Dictionary<string, ElementReference> _tabButtons = new();
+    private string? _focusTab;
     private ViewOptions _viewOptions = ViewOptions.Default;
 
     // Trip search, used by several tabs
@@ -165,6 +182,7 @@
     private string? _validationWarning;
     private PipelineExecutionReport? _lastReport;
     private ValidRouteQuery? _lastQuery;
+    private int _searchId;
     private PipelineStepDiagnostic? _selectedStep;
 
     // What the tabs remember between visits (only the open tab's component exists at any time)
@@ -176,9 +194,10 @@
     private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
 
     private string? _signedInName;
+    private string _userName = "";
 
     // The role comes from the auth cookie (read once when the circuit starts), so the checks below are server-side.
-    private bool IsDispatcher => AppState.CurrentRole == UserRole.DispatcherAdmin;
+    private bool IsDispatcher => AppState.CurrentRole == UserRole.Dispatcher;
 
     private PlannedRoute? PricedRoute =>
         _lastReport?.Outcome is Something<PricedItinerary> { InnerValue: var it } ? it.TrafficRoute.Route : null;
@@ -189,33 +208,83 @@
         {
             var user = (await AuthenticationStateTask).User;
             if (user.Identity?.IsAuthenticated == true)
+            {
                 _signedInName = user.FindFirst(RoleNames.DisplayNameClaim)?.Value ?? user.Identity.Name;
+                _userName = user.Identity.Name ?? "";
+            }
             AppState.SetRole(RoleNames.FromPrincipal(user));
         }
 
         AppState.OnStateChanged += HandleStateChanged;
-        ChaosController.OnTrafficAlertBroadcast += HandleTrafficAlert;
+        Operations.OnTrafficAlertBroadcast += HandleTrafficAlert;
 
         _inputs.LoadFrom(AppState.CurrentSnapshot);
         ExecutePlannerPipelineInternal(commitHistory: false);
     }
 
+    // Runs on the first render and whenever the ?tab= part of the address changes (a click, Back, a link).
+    // A tab that is not offered to this visitor cannot be opened, whatever the address says.
+    protected override void OnParametersSet()
+    {
+        var requested = VisibleTabs.Any(t => t.Id == Tab) ? Tab! : "plan";
+        if (requested == _activeTab)
+            return;
+
+        _activeTab = requested;
+        if (requested == "bookings")
+            _bookingsOpened++;
+    }
+
     private void OpenTab(string id)
     {
-        // A tab that is not offered to this visitor cannot be opened, whatever the click says.
         if (!VisibleTabs.Any(t => t.Id == id))
             return;
 
-        _activeTab = id;
-        if (id == "bookings")
-            _bookingsOpened++;
+        // Clicking the open Bookings tab again reloads its history.
+        if (id == _activeTab)
+        {
+            if (id == "bookings")
+                _bookingsOpened++;
+            return;
+        }
+
+        Navigation.NavigateTo(Navigation.GetUriWithQueryParameter("tab", id == "plan" ? null : id));
+    }
+
+    // Arrow keys move between tabs, Home and End jump to the first and last (WAI-ARIA tabs pattern).
+    private void OnTabKey(KeyboardEventArgs e, string id)
+    {
+        var ids = VisibleTabs.Select(t => t.Id).ToList();
+        var index = ids.IndexOf(id);
+        var target = e.Key switch
+        {
+            "ArrowRight" => ids[(index + 1) % ids.Count],
+            "ArrowLeft" => ids[(index - 1 + ids.Count) % ids.Count],
+            "Home" => ids[0],
+            "End" => ids[^1],
+            _ => null
+        };
+        if (target is null)
+            return;
+
+        _focusTab = target;
+        OpenTab(target);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focusTab is { } id && _tabButtons.TryGetValue(id, out var button))
+        {
+            _focusTab = null;
+            await button.FocusAsync();
+        }
     }
 
     private void ToggleCourseNotes()
     {
         _viewOptions = _viewOptions with { ShowCourseNotes = !_viewOptions.ShowCourseNotes };
         if (!VisibleTabs.Any(t => t.Id == _activeTab))
-            _activeTab = "plan";
+            Navigation.NavigateTo(Navigation.GetUriWithQueryParameter("tab", (string?)null), replace: true);
     }
 
     private void HandleStateChanged() => InvokeAsync(StateHasChanged);
@@ -246,15 +315,18 @@
             EmptyRouteQuery { FieldName: var f } => $"Please enter the {f.ToLowerInvariant()}.",
             SameStationError { Station: var s } => $"From and To are the same station ({UiText.Station(s)}).",
             InvalidPassengerCount => "Choose between 1 and 50 passengers.",
+            _ when _inputs.TravelDate < DateOnly.FromDateTime(DateTime.Today) => "Choose a travel date from today on.",
             _ => null
         };
 
-        // Any new search, valid or not, clears the progress list of the previous booking attempt.
+        // Any new search, valid or not, clears the progress list of the previous booking attempt
+        // and can be booked again.
+        _searchId++;
         _bookings.ClearStages();
 
         // Only a ValidRouteQuery reaches the pipeline; every other case of the union stops here with its message,
         // so an invalid search can never be priced or booked.
-        if (validation is not ValidRouteQuery query)
+        if (validation is not ValidRouteQuery query || _validationWarning is not null)
         {
             _lastReport = null;
             _selectedStep = null;
@@ -279,8 +351,9 @@
     private void PriceQuery(ValidRouteQuery query)
     {
         _pricedPassengers = query.Passengers;
-        _lastReport = Orchestrator.ExecutePipeline(query.Origin, query.Destination, query.Offering, query.Passengers);
-        _selectedStep = _lastReport.Diagnostics.LastOrDefault(d => d.Status != "Skipped") ?? _lastReport.Diagnostics.LastOrDefault();
+        _lastReport = Orchestrator.ExecutePipeline(query.Origin, query.Destination, query.Offering, query.Passengers)
+            .Tap(report => Logger.SearchOutcome(report, query.Origin, query.Destination));
+        _selectedStep = _lastReport.Diagnostics.LastOrDefault(d => d.Status != StepStatus.Skipped) ?? _lastReport.Diagnostics.LastOrDefault();
     }
 
     private void TriggerNothingDemo()
@@ -293,19 +366,19 @@
     private void TriggerErrorDemo()
     {
         if (!IsDispatcher) return;
-        ChaosController.SimulateTrafficMonitorCrash = true;
+        Operations.SimulateTrafficMonitorCrash = true;
         ExecutePlannerPipelineInternal(commitHistory: false);
         AppState.AppendFeedMessage("Simulated failure of the engineering works feed (from the planner).");
     }
 
-    private void ResetChaosAndReExecute()
+    private void ClearFailuresAndSearchAgain()
     {
         if (!IsDispatcher) return;
-        ChaosController.SimulateMappingServiceCrash = false;
-        ChaosController.SimulateRoutePlannerCrash = false;
-        ChaosController.SimulateTrafficMonitorCrash = false;
-        ChaosController.SimulatePricingCrash = false;
-        ChaosController.SimulatePaymentOutage = false;
+        Operations.SimulateMappingServiceCrash = false;
+        Operations.SimulateRoutePlannerCrash = false;
+        Operations.SimulateTrafficMonitorCrash = false;
+        Operations.SimulatePricingCrash = false;
+        Operations.SimulatePaymentOutage = false;
         ExecutePlannerPipelineInternal(commitHistory: false);
     }
 
@@ -335,6 +408,6 @@
     public void Dispose()
     {
         AppState.OnStateChanged -= HandleStateChanged;
-        ChaosController.OnTrafficAlertBroadcast -= HandleTrafficAlert;
+        Operations.OnTrafficAlertBroadcast -= HandleTrafficAlert;
     }
 }

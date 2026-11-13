@@ -1,12 +1,9 @@
-@* "Dispatcher" tab: engineering works per station, simulated service failures and announcements, next to the
-   activity feed. It receives the feed lines, the signed-in user's display name (written into the feed) and
-   an OnRoadworksChanged callback, which Home uses to price the current search again. The cascaded role
-   decides what is shown: passengers get a "Dispatchers only" notice instead of the controls, and every
-   action checks the role again itself, so hiding the controls is not the only protection. The shared
-   ChaosAndTrafficController and the station list are injected. *@
+@* Dispatcher tab: engineering works, simulated failures, announcements and the activity feed.
+   Every action checks the cascaded role again, so hiding the controls is not the only protection. *@
 
-@inject ChaosAndTrafficController ChaosController
+@inject OperationsControls Operations
 @inject IMappingSystem MappingSystem
+@inject ILogger<DispatcherTab> Logger
 
 <div class="grid-2">
     <div class="stack">
@@ -14,7 +11,7 @@
             <div class="card-head">
                 <div>
                     <h2>Engineering works</h2>
-                    <p class="card-sub">Connections to a marked station cost @UiText.PercentChange(ChaosController.RoadworksMultiplier) on the affected section. Changes apply to every user at once.</p>
+                    <p class="card-sub">Connections to a marked station cost @UiText.PercentChange(Operations.EngineeringWorksMultiplier) on the affected section. Changes apply to every user at once.</p>
                 </div>
             </div>
 
@@ -32,7 +29,7 @@
                     {
                         var stationCode = st.StationCode;
                         <label class="check">
-                            <input type="checkbox" class="switch" checked="@ChaosController.HasRoadworksAt(stationCode)" @onchange="() => ToggleStationRoadworks(stationCode)" />
+                            <input type="checkbox" class="switch" checked="@Operations.HasEngineeringWorksAt(stationCode)" @onchange="() => ToggleEngineeringWorks(stationCode)" />
                             @UiText.Station(stationCode)
                         </label>
                     }
@@ -40,7 +37,7 @@
             }
 
             <HowItWorks>
-                Engineering works live in one shared <code>ChaosAndTrafficController</code>. Its station set is an
+                Engineering works live in one shared <code>OperationsControls</code>. Its station set is an
                 <code>ImmutableHashSet</code> replaced atomically, so two dispatchers changing it at the same moment
                 cannot lose an update; its event updates every open session and is forwarded to SignalR clients.
             </HowItWorks>
@@ -56,11 +53,11 @@
                     </div>
                 </div>
                 <div class="check-list">
-                    <label class="check"><input type="checkbox" class="switch danger" @bind="ChaosController.SimulateMappingServiceCrash" /> Station lookup fails</label>
-                    <label class="check"><input type="checkbox" class="switch danger" @bind="ChaosController.SimulateRoutePlannerCrash" /> Route planner fails</label>
-                    <label class="check"><input type="checkbox" class="switch danger" @bind="ChaosController.SimulateTrafficMonitorCrash" /> Engineering works feed fails</label>
-                    <label class="check"><input type="checkbox" class="switch danger" @bind="ChaosController.SimulatePricingCrash" /> Fare calculation fails</label>
-                    <label class="check"><input type="checkbox" class="switch danger" @bind="ChaosController.SimulatePaymentOutage" /> Payment provider is down</label>
+                    <label class="check"><input type="checkbox" class="switch danger" @bind="Operations.SimulateMappingServiceCrash" /> Station lookup fails</label>
+                    <label class="check"><input type="checkbox" class="switch danger" @bind="Operations.SimulateRoutePlannerCrash" /> Route planner fails</label>
+                    <label class="check"><input type="checkbox" class="switch danger" @bind="Operations.SimulateTrafficMonitorCrash" /> Engineering works feed fails</label>
+                    <label class="check"><input type="checkbox" class="switch danger" @bind="Operations.SimulatePricingCrash" /> Fare calculation fails</label>
+                    <label class="check"><input type="checkbox" class="switch danger" @bind="Operations.SimulatePaymentOutage" /> Payment provider is down</label>
                 </div>
 
                 <HowItWorks>
@@ -107,10 +104,6 @@
     [Parameter]
     public string? SignedInName { get; set; }
 
-    /// <summary>Raised after engineering works were switched on or off at a station.</summary>
-    [Parameter]
-    public EventCallback OnRoadworksChanged { get; set; }
-
     /// <summary>
     /// Cascaded by Home from the auth cookie. If nothing is cascaded the default is Passenger,
     /// so the controls stay locked.
@@ -118,7 +111,7 @@
     [CascadingParameter]
     public UserRole Role { get; set; }
 
-    private bool IsDispatcher => Role == UserRole.DispatcherAdmin;
+    private bool IsDispatcher => Role == UserRole.Dispatcher;
 
     private string _announcement = "";
 
@@ -128,20 +121,22 @@
     /// <summary>
     /// Starts or ends engineering works at a station. Passengers never see the switches, but the role is
     /// checked here as well, on the server, so a call that arrives anyway changes nothing. Public so the
-    /// tests can call it directly.
+    /// tests can call it directly. Open searches in every session, this one included, are priced again by
+    /// Home when the controller announces the change.
     /// </summary>
-    public async Task ToggleStationRoadworks(string stationCode)
+    public void ToggleEngineeringWorks(string stationCode)
     {
         if (!IsDispatcher) return;
-        ChaosController.ToggleRoadworks(stationCode, $"Dispatcher {SignedInName}");
-        await OnRoadworksChanged.InvokeAsync();
+        var actor = $"Dispatcher {SignedInName}";
+        Operations.ToggleEngineeringWorks(stationCode, actor);
+        Logger.EngineeringWorksChanged(actor, stationCode, Operations.HasEngineeringWorksAt(stationCode) ? "on" : "off");
     }
 
     /// <summary>Same as the hub's BroadcastAdvisory: the message reaches every open session and SignalR client.</summary>
     private void SendAnnouncement()
     {
         if (!IsDispatcher || string.IsNullOrWhiteSpace(_announcement)) return;
-        ChaosController.BroadcastCustomAdvisory($"Dispatcher {SignedInName}: {_announcement.Trim()}");
+        Operations.BroadcastCustomAdvisory($"Dispatcher {SignedInName}: {_announcement.Trim()}");
         _announcement = "";
     }
 

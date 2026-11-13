@@ -62,8 +62,8 @@ public static class CurryingAndLoops
 }
 
 /// <summary>
-/// Custom IEnumerator<T> / IEnumerable<T> implementation
-/// demonstrating allocation-conscious sequence traversal for transit route simulation.
+/// A hand-written IEnumerable/IEnumerator that applies a step function until a stop condition holds,
+/// yielding every state. Used by the loop benchmark as the "custom iterator" variant.
 /// </summary>
 public sealed class TransitStepEnumerable<TState>(
     TState seed,

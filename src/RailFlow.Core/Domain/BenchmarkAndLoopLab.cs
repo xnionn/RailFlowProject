@@ -10,16 +10,15 @@ public sealed record BenchmarkEntry(
     ComputedResult ComputedValue,
     double ElapsedMicroseconds,
     double RelativeRatio,
-    string ArchitecturalNote);
+    string Note);
 
 public readonly record struct ComputedResult(int Value);
 
 /// <summary>
-/// Supporting code for the Timetable tab (train simulation) and the Lab tab (CSV check, benchmark):
+/// Code behind the Lab tab:
 /// 1. A CSV parser built from curried, partially applied functions.
 /// 2. Loggers with the service name and level fixed by partial application.
-/// 3. A step-by-step train simulation run with an indefinite loop (IterateStepsUntil).
-/// 4. A small Stopwatch benchmark comparing loop styles on the same input.
+/// 3. A small Stopwatch benchmark comparing loop styles on the same input.
 /// </summary>
 public static class BenchmarkAndLoopLab
 {
@@ -55,90 +54,13 @@ public static class BenchmarkAndLoopLab
     public static Func<string, string> CreateServiceLogger(string serviceName, string level) =>
         FormatLogEntry.Partial(serviceName, level);
 
-    // --- 3. Indefinite Loops & Trampolining ---
-
-    /// <summary>
-    /// Follows the train along the route in fixed time steps with IterateStepsUntil (an indefinite loop over
-    /// immutable state records). Each step asks the pure function <see cref="PositionAt"/> where the train is,
-    /// so the simulation uses the same running times and station stops as the timetable and arrives at the same time.
-    /// </summary>
-    public static ImmutableList<TransitSimulationState> RunTransitSimulation(PlannedRoute route, int stepMinutes = 20)
-    {
-        var journeyMinutes = RecursiveTimetable.JourneyMinutes(route);
-        var initial = new TransitSimulationState(
-            StepIndex: 0,
-            CurrentStation: route.Origin,
-            ProgressKm: 0.0,
-            TotalDistanceKm: route.TotalDistanceKm,
-            AccumulatedMinutes: 0,
-            LastEventDescription: $"Departed {StationNames.Display(route.Origin)} on {route.Segments.FirstOrDefault()?.LineName ?? "-"}",
-            ReachedDestination: route.Segments.Count == 0);
-
-        return initial.IterateStepsUntil(
-            updateState: state =>
-            {
-                var minutes = Math.Min(journeyMinutes, state.AccumulatedMinutes + stepMinutes);
-                var (km, lastStation, description) = PositionAt(route, minutes);
-                return state with
-                {
-                    StepIndex = state.StepIndex + 1,
-                    CurrentStation = lastStation,
-                    ProgressKm = km,
-                    AccumulatedMinutes = minutes,
-                    LastEventDescription = description,
-                    ReachedDestination = minutes >= journeyMinutes
-                };
-            },
-            // The step limit only guards against a route with zero running time.
-            endCondition: s => s.ReachedDestination || s.StepIndex >= 500
-        ).ToImmutableList();
-    }
-
-    /// <summary>
-    /// Where the train is a given number of minutes after departure: distance covered, the last station passed
-    /// and what it is doing. Sections are run at their own average speed; every intermediate station has a
-    /// stop of <see cref="RecursiveTimetable.DwellMinutes"/>.
-    /// </summary>
-    public static (double Km, string LastStation, string Description) PositionAt(PlannedRoute route, int minutesAfterDeparture)
-    {
-        var elapsed = 0;
-        var km = 0.0;
-        var lastStation = route.Origin;
-
-        for (var i = 0; i < route.Segments.Count; i++)
-        {
-            var segment = route.Segments[i];
-            if (minutesAfterDeparture < elapsed + segment.BaseMinutes)
-            {
-                var share = (double)(minutesAfterDeparture - elapsed) / Math.Max(1, segment.BaseMinutes);
-                var position = Math.Round(km + segment.DistanceKm * share, 1);
-                return (position, lastStation, $"On {segment.LineName} towards {StationNames.Display(segment.ToStation)}");
-            }
-
-            elapsed += segment.BaseMinutes;
-            km += segment.DistanceKm;
-            lastStation = segment.ToStation;
-
-            var isLast = i == route.Segments.Count - 1;
-            if (isLast)
-                break;
-
-            if (minutesAfterDeparture < elapsed + RecursiveTimetable.DwellMinutes)
-                return (Math.Round(km, 1), lastStation, $"Stopped at {StationNames.Display(lastStation)}");
-
-            elapsed += RecursiveTimetable.DwellMinutes;
-        }
-
-        return (Math.Round(km, 1), route.Destination, $"Arrived at {StationNames.Display(route.Destination)}");
-    }
-
-    // --- 4. Live Performance Benchmark Suite ---
+    // --- Loop benchmark ---
     // Compares several loop styles (imperative, LINQ, Fork combinator, trampoline loop, custom iterator) on the same elevation puzzle:
     // '^' = +1 elevation grade, 'v' = -1 elevation grade; every approach returns the final elevation.
     // Timings come from a plain Stopwatch (see Measure), so they are indicative, not a rigorous benchmark.
-    public static ImmutableList<BenchmarkEntry> RunElevationTelemetryBenchmark(int signalLength = 25_000)
+    public static ImmutableList<BenchmarkEntry> RunLoopBenchmark(int signalLength = 25_000)
     {
-        // Generate deterministic signal string of '^' and 'v'
+        // The same input every run: one 'v' after every two '^'.
         var chars = new char[signalLength];
         for (int i = 0; i < signalLength; i++)
         {
@@ -223,7 +145,7 @@ public static class BenchmarkAndLoopLab
 
     private static (int Result, double ElapsedMicroseconds) Measure(Func<int> action, int iterations = 15)
     {
-        // Warmup JIT
+        // One untimed run first, so JIT compilation is not counted.
         int last = action();
         var sw = Stopwatch.StartNew();
         for (int i = 0; i < iterations; i++)

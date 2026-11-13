@@ -4,7 +4,7 @@
 
 @inject NetworkDataset Network
 @inject RailRoutePlanner RoutePlanner
-@inject ChaosAndTrafficController ChaosController
+@inject OperationsControls Operations
 
 <div class="stats">
     <StatCard Label="Stations" Value="@Network.Stations.Count.ToString("N0")" Hint="@Network.Source" />
@@ -81,7 +81,7 @@
 
 @code {
     private bool HasWorks(GraphConnection edge) =>
-        ChaosController.HasRoadworksAt(edge.FromStation) || ChaosController.HasRoadworksAt(edge.ToStation);
+        Operations.HasEngineeringWorksAt(edge.FromStation) || Operations.HasEngineeringWorksAt(edge.ToStation);
 
     private int AffectedConnections => RoutePlanner.GraphEngine.Edges.Count(HasWorks);
 }

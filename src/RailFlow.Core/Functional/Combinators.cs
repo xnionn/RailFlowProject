@@ -7,7 +7,7 @@ namespace RailFlow.Core.Functional;
 /// </summary>
 public static class Combinators
 {
-    // --- Monad Factory (Return / Unit) ---
+    // --- Return (unit) ---
     public static Maybe<T> ToMaybe<T>(this T? value) =>
         value is null ? new UnhandledNothing<T>() : new Something<T>(value);
 
@@ -64,7 +64,7 @@ public static class Combinators
             _ => new UnhandledNothing<T>()
         };
 
-    // --- Side-Effect Handlers with Unhandled -> Handled state transition ---
+    // --- Side-effect handlers: each problem is handled (logged) once ---
     public static Maybe<T> OnSomething<T>(this Maybe<T> @this, Action<T> onSomething)
     {
         if (@this is Something<T> { InnerValue: { } val })
@@ -94,7 +94,7 @@ public static class Combinators
         return @this;
     }
 
-    // --- Async Monad Composition ---
+    // --- Async composition ---
     public static async Task<Maybe<TOut>> BindAsync<TIn, TOut>(
         this Task<Maybe<TIn>> @this,
         Func<TIn, Task<Maybe<TOut>>> bind)
@@ -126,10 +126,10 @@ public static class Combinators
         return awaited.Map(map);
     }
 
-    // --- Higher-Order Combinators ---
+    // --- Higher-order combinators ---
 
     /// <summary>
-    /// Tap combinator: executes a side-effect action (e.g. logging/telemetry) and returns the original value.
+    /// Tap combinator: runs a side effect (the app uses it for logging) and returns the original value.
     /// </summary>
     public static T Tap<T>(this T @this, Action<T> sideEffect)
     {
