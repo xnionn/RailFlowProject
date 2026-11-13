@@ -459,4 +459,42 @@ public sealed class WebApiIntegrationTests(RailFlowWebFactory factory) : IClassF
             Assert.Equal(Path.GetFullPath(factory.BookingDirectory), Path.GetFullPath(directory!));
         }
     }
+
+    [Fact]
+    public async Task Login_PreservesChosenNonDefaultTripAcrossRedirect_AndRecomputesPrice()
+    {
+        var travelDate = DateOnly.FromDateTime(DateTime.Today.AddDays(7));
+        var departure = new TimeOnly(14, 30);
+        var snapshot = new RailFlow.Infrastructure.Services.PlannerFormSnapshot(
+            Origin: "MILAN",
+            Destination: "VIENNA",
+            Passengers: 3,
+            OfferingKey: "HolidayComfort",
+            TimestampUtc: DateTime.UtcNow,
+            TravelDate: travelDate,
+            Departure: departure);
+
+        var returnUrl = RailFlow.Web.Components.Tabs.PlannerInputs.BuildReturnUrl("bookings", snapshot);
+        var client = factory.CreateBrowserClient();
+
+        // 1. Verify the guest checkout page embeds the trip parameters in the "Sign in before paying" link.
+        var guestCheckoutHtml = await client.GetStringAsync(returnUrl);
+        Assert.Contains("Milan → Vienna", guestCheckoutHtml);
+        Assert.Contains("City break · 3 passengers", guestCheckoutHtml);
+        Assert.Contains("14:30", guestCheckoutHtml);
+        Assert.Contains("ReturnUrl=%2F%3Ftab%3Dbookings%26from%3DMILAN%26to%3DVIENNA%26pax%3D3", guestCheckoutHtml);
+
+        // 2. Submit login with ReturnUrl from the sign-in flow and follow the redirect to the Bookings tab.
+        var loginResponse = await SubmitLoginAsync(client, "passenger", "passenger-demo", returnUrl);
+        Assert.Equal(HttpStatusCode.Redirect, loginResponse.StatusCode);
+        var redirectTarget = new Uri(client.BaseAddress!, loginResponse.Headers.Location!);
+        Assert.Equal(returnUrl, redirectTarget.PathAndQuery);
+
+        var signedInCheckoutHtml = await client.GetStringAsync(redirectTarget.PathAndQuery);
+        Assert.Contains("Demo Passenger", signedInCheckoutHtml);
+        Assert.Contains("Milan → Vienna", signedInCheckoutHtml);
+        Assert.Contains("City break · 3 passengers", signedInCheckoutHtml);
+        Assert.Contains("14:30", signedInCheckoutHtml);
+        Assert.DoesNotContain("London → Zurich", signedInCheckoutHtml);
+    }
 }

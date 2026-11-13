@@ -43,7 +43,7 @@
             }
         </datalist>
 
-        <div class="form-grid" style="margin-top:0.75rem;">
+        <div class="form-grid three" style="margin-top:0.75rem;">
             <div class="field">
                 <label for="travelDate">Date</label>
                 <input id="travelDate" type="date" min="@DateTime.Today.ToString("yyyy-MM-dd")" @bind="Inputs.TravelDate" />
@@ -74,7 +74,7 @@
         }
 
         <div class="actions">
-            <button class="btn btn-primary" @onclick="() => OnSearch.InvokeAsync()">Find route and price</button>
+            <button class="btn btn-primary" @onclick="SearchAndFocusResultAsync">Find route and price</button>
         </div>
 
         @if (Options.ShowCourseNotes)
@@ -98,9 +98,13 @@
         </HowItWorks>
     </section>
 
-    <section class="card">
+    <section class="card" id="trip-result-card" tabindex="-1" @ref="_resultCard">
         <div class="card-head">
             <h2>Your trip</h2>
+            @if (IsStaleSearch)
+            {
+                <span class="tag warn">Outdated quote</span>
+            }
         </div>
 
         @if (Report is null)
@@ -111,11 +115,24 @@
         }
         else
         {
+            @if (IsStaleSearch)
+            {
+                <div class="alert warn" role="status" style="margin-top:0; margin-bottom:0.75rem;">
+                    <strong>Form edited since last search</strong>
+                    <p>Showing the previous quote for @UiText.Station(PricedSnapshot!.Origin) → @UiText.Station(PricedSnapshot.Destination). Search again to update the route and price before booking.</p>
+                    <div class="actions">
+                        <button class="btn btn-sm btn-primary" @onclick="SearchAndFocusResultAsync">Update route and price</button>
+                    </div>
+                </div>
+            }
+
             <MaybeView TItem="PricedItinerary" State="Report.Outcome" OnRetry="OnRetry">
                 <SomethingTemplate Context="trip">
                     @{
                         var route = trip.TrafficRoute.Route;
-                        var arrivalStop = RecursiveTimetable.BuildTimetable(route, Inputs.Departure)[^1];
+                        var pricedDate = PricedSnapshot?.TravelDate ?? Inputs.TravelDate;
+                        var pricedDeparture = PricedSnapshot?.Departure ?? Inputs.Departure;
+                        var arrivalStop = RecursiveTimetable.BuildTimetable(route, pricedDeparture)[^1];
                         var changes = Math.Max(0, route.Segments.Count - 1);
                     }
                     <div class="trip-head">
@@ -128,7 +145,7 @@
                     </p>
 
                     <div class="trip-times">
-                        <div><span class="muted small">Departs</span><strong>@Inputs.TravelDate.ToString("ddd d MMM"), @Inputs.Departure.ToString("HH:mm")</strong></div>
+                        <div><span class="muted small">Departs</span><strong>@pricedDate.ToString("ddd d MMM"), @pricedDeparture.ToString("HH:mm")</strong></div>
                         <div>
                             <span class="muted small">Arrives</span>
                             <strong>@arrivalStop.Arrival.ToString("HH:mm")@(arrivalStop.DayOffset > 0 ? $" +{arrivalStop.DayOffset}d" : "")</strong>
@@ -175,7 +192,7 @@
                     <p class="muted small" style="margin:0.25rem 0 0;">A @UiText.Money(BookingWorkflow.ServiceFee) booking fee is added at checkout.</p>
 
                     <div class="actions">
-                        <button class="btn btn-primary btn-block" @onclick="() => OnBookTrip.InvokeAsync()">Book this trip</button>
+                        <button class="btn btn-primary btn-block" disabled="@IsStaleSearch" @onclick="() => OnBookTrip.InvokeAsync()">Book this trip</button>
                         <button class="btn btn-sm" @onclick="() => OnViewTimetable.InvokeAsync()">View timetable</button>
                     </div>
                 </SomethingTemplate>
@@ -264,6 +281,10 @@
     [Parameter]
     public int PricedPassengers { get; set; }
 
+    /// <summary>Full snapshot of the inputs when the shown quote was calculated.</summary>
+    [Parameter]
+    public PlannerFormSnapshot? PricedSnapshot { get; set; }
+
     [Parameter]
     public string? ValidationWarning { get; set; }
 
@@ -316,12 +337,45 @@
     [CascadingParameter]
     public ViewOptions Options { get; set; } = ViewOptions.Default;
 
+    private ElementReference _resultCard;
+    private bool _focusResultAfterSearch;
+
     // The station list never changes while the app runs, so it is read once per component.
     private IReadOnlyList<GeoCoord> Stations => _stations ??= MappingSystem.GetAllStations();
     private IReadOnlyList<GeoCoord>? _stations;
+
+    private bool IsStaleSearch =>
+        Report?.Outcome is Something<PricedItinerary>
+        && PricedSnapshot is not null
+        && !Inputs.Matches(PricedSnapshot);
 
     private bool FailuresSimulated =>
         Operations.SimulateMappingServiceCrash || Operations.SimulateRoutePlannerCrash ||
         Operations.SimulateTrafficMonitorCrash || Operations.SimulatePricingCrash ||
         Operations.SimulatePaymentOutage;
+
+    private async Task SearchAndFocusResultAsync()
+    {
+        _focusResultAfterSearch = true;
+        await OnSearch.InvokeAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focusResultAfterSearch)
+        {
+            _focusResultAfterSearch = false;
+            if (ValidationWarning is null)
+            {
+                try
+                {
+                    await _resultCard.FocusAsync();
+                }
+                catch
+                {
+                    // Ignore focus errors in non-interactive test environments.
+                }
+            }
+        }
+    }
 }

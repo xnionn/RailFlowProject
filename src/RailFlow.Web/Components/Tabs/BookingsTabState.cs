@@ -24,10 +24,30 @@ public sealed class BookingsTabState
     public ImmutableList<StageView> Stages { get; set; } = ImmutableList<StageView>.Empty;
 
     /// <summary>
-    /// The search that was booked successfully. A price update for the same search (engineering works changed)
-    /// does not make it bookable again; only a new search does.
+    /// The search whose card was already charged (whether saving to disk succeeded or failed),
+    /// so a second click or a re-price cannot charge the card again.
+    /// </summary>
+    public int? ChargedSearchId { get; set; }
+
+    /// <summary>
+    /// The search that was both paid and saved to the booking journal.
     /// </summary>
     public int? BookedSearchId { get; set; }
+
+    /// <summary>
+    /// Immutable snapshot of the receipt confirmed and saved for <see cref="BookedSearchId"/>.
+    /// Kept separate from <see cref="SelectedReceipt"/> so browsing the history table only changes
+    /// the e-ticket preview and never alters the confirmation banner.
+    /// </summary>
+    public BookingReceipt? BookedReceipt { get; set; }
+
+    /// <summary>
+    /// Receipt from a charge that succeeded when writing to the booking journal subsequently failed.
+    /// Kept so the user sees the transaction reference and recovery instructions instead of a fake confirmation.
+    /// </summary>
+    public BookingReceipt? UnsavedPaidReceipt { get; set; }
+
+    public string? UnsavedStorageReason { get; set; }
 
     // History as last loaded from the selected journal file
     public ImmutableList<BookingReceipt> History { get; set; } = ImmutableList<BookingReceipt>.Empty;
@@ -50,5 +70,13 @@ public sealed class BookingsTabState
         || OwnBookingIds.Contains(receipt.BookingId)
         || (owner.Length > 0 && string.Equals(receipt.Owner, owner, StringComparison.OrdinalIgnoreCase));
 
-    public void ClearStages() => Stages = ImmutableList<StageView>.Empty;
+    public void ClearStages()
+    {
+        Stages = ImmutableList<StageView>.Empty;
+        ChargedSearchId = null;
+        BookedSearchId = null;
+        BookedReceipt = null;
+        UnsavedPaidReceipt = null;
+        UnsavedStorageReason = null;
+    }
 }

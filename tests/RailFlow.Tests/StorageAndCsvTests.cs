@@ -150,9 +150,11 @@ public sealed class StorageAndCsvTests : IDisposable
         var chaos = new OperationsControls();
         var gateway = new SimulatedPaymentGateway(chaos);
         var journalFor = BookingJournalFactory.ForDirectory(_directory);
+        var travelDate = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(5);
+        var departure = new TimeOnly(22, 30);
 
         var stored = BookingWorkflow
-            .Run(new BookingDraft(BookingWorkflowTests.PriceLondonParis(), 1, "Alimzhan", "alimzhan@example.com"),
+            .Run(new BookingDraft(BookingWorkflowTests.PriceLondonParis(), 1, "Alimzhan", "alimzhan@example.com", "passenger", travelDate, departure),
                 "RAILFLOW20", gateway.Charge, DateTime.UtcNow)
             .Receipt
             .Bind(receipt => journalFor(JournalFormat.Json).Append([receipt]).Map(_ => receipt));
@@ -164,7 +166,14 @@ public sealed class StorageAndCsvTests : IDisposable
         journalFor(JournalFormat.TextLog).Append(fromJson);
         var fromText = Assert.IsType<Success<JournalContents>>(journalFor(JournalFormat.TextLog).LoadAll()).Data.Receipts;
 
-        Assert.Equal(receipt, Assert.Single(fromText));
-        Assert.Equal(83.46m, receipt.AmountPaid); // 101.20 - 20% + 2.50
+        var reloaded = Assert.Single(fromText);
+        Assert.Equal(receipt, reloaded);
+        Assert.Equal(83.46m, reloaded.AmountPaid); // 101.20 - 20% + 2.50
+        Assert.Equal(travelDate, reloaded.TravelDate);
+        Assert.Equal(departure, reloaded.DepartureTime);
+        Assert.Equal(new TimeOnly(0, 45), reloaded.ArrivalTime);
+        Assert.Equal(1, reloaded.ArrivalDayOffset);
+        Assert.NotNull(reloaded.Legs);
+        Assert.Equal(receipt.Legs, reloaded.Legs);
     }
 }

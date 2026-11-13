@@ -60,42 +60,45 @@ else
     </section>
 
     <section class="card">
-        <div class="card-head">
-            <div>
-                <h2>Journey progress</h2>
-                <p class="card-sub">Where the train is every @StepMinutes minutes, using the same running times and stops as the timetable.</p>
-            </div>
-        </div>
+        <details class="progress-details" open="@Options.ShowCourseNotes">
+            <summary class="card-head summary-head">
+                <div>
+                    <h2>Journey progress</h2>
+                    <p class="card-sub">Where the train is every @StepMinutes minutes (@_progress.Count steps), using the same running times and stops as the timetable.</p>
+                </div>
+                <span class="tag">@(_progress.Count) steps</span>
+            </summary>
 
-        <div class="table-wrap scroll">
-            <table>
-                <thead>
-                    <tr>
-                        <th class="num">Time</th>
-                        <th>Last station</th>
-                        <th class="num">Distance</th>
-                        <th>Status</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach (var step in _progress)
-                    {
+            <div class="table-wrap scroll" style="margin-top:0.75rem;">
+                <table>
+                    <thead>
                         <tr>
-                            <td class="num">@ClockTime(step.AccumulatedMinutes)</td>
-                            <td>@UiText.Station(step.CurrentStation)</td>
-                            <td class="num">@step.ProgressKm.ToString("N0") of @step.TotalDistanceKm.ToString("N0") km</td>
-                            <td>@step.LastEventDescription</td>
+                            <th class="num">Time</th>
+                            <th>Last station</th>
+                            <th class="num">Distance</th>
+                            <th>Status</th>
                         </tr>
-                    }
-                </tbody>
-            </table>
-        </div>
+                    </thead>
+                    <tbody>
+                        @foreach (var step in _progress)
+                        {
+                            <tr>
+                                <td class="num">@ClockTime(step.AccumulatedMinutes)</td>
+                                <td>@UiText.Station(step.CurrentStation)</td>
+                                <td class="num">@step.ProgressKm.ToString("N0") of @step.TotalDistanceKm.ToString("N0") km</td>
+                                <td>@step.LastEventDescription</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
 
-        <HowItWorks>
-            An indefinite loop written with <code>IterateStepsUntil</code>: each step is a new immutable record created
-            with <code>with</code>, and the pure function <code>PositionAt</code> says where the train is at that minute.
-            The loop stops when the destination is reached, not after a fixed number of steps.
-        </HowItWorks>
+            <HowItWorks>
+                An indefinite loop written with <code>IterateStepsUntil</code>: each step is a new immutable record created
+                with <code>with</code>, and the pure function <code>PositionAt</code> says where the train is at that minute.
+                The loop stops when the destination is reached, not after a fixed number of steps.
+            </HowItWorks>
+        </details>
     </section>
 }
 
@@ -125,6 +128,9 @@ else
 
     [Parameter]
     public EventCallback OnPlanTrip { get; set; }
+
+    [CascadingParameter]
+    public ViewOptions Options { get; set; } = ViewOptions.Default;
 
     private ImmutableList<TimetableStop> _timetable = ImmutableList<TimetableStop>.Empty;
     private ImmutableList<TransitSimulationState> _progress = ImmutableList<TransitSimulationState>.Empty;

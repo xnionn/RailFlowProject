@@ -33,44 +33,62 @@
             <h2>Connections</h2>
             <p class="card-sub">Routes use the fewest changes; engineering works add a surcharge on the affected connections.</p>
         </div>
+        <div class="inline">
+            <label for="networkFilter" class="visually-hidden">Filter connections</label>
+            <input id="networkFilter" type="search" @bind="_filter" @bind:event="oninput" placeholder="Filter station or line" autocomplete="off" />
+            <label class="check">
+                <input type="checkbox" class="switch" @bind="_onlyWorks" />
+                Works only
+            </label>
+        </div>
     </div>
 
-    <div class="table-wrap scroll">
-        <table>
-            <thead>
-                <tr>
-                    <th>From</th>
-                    <th>To</th>
-                    <th>Line</th>
-                    <th class="num">Distance</th>
-                    <th class="num">Time</th>
-                    <th>Status</th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach (var edge in RoutePlanner.GraphEngine.Edges)
-                {
+    @if (FilteredEdges.Count == 0)
+    {
+        <div class="empty-state">
+            <p>No connections match your filter.</p>
+            <button class="btn btn-sm" @onclick="ClearFilter">Reset filter</button>
+        </div>
+    }
+    else
+    {
+        <div class="table-wrap scroll">
+            <table>
+                <thead>
                     <tr>
-                        <td>@UiText.Station(edge.FromStation)</td>
-                        <td>@UiText.Station(edge.ToStation)</td>
-                        <td class="nowrap">@edge.LineName</td>
-                        <td class="num">@edge.DistanceKm.ToString("N0") km</td>
-                        <td class="num">@UiText.Duration(edge.Minutes)</td>
-                        <td>
-                            @if (HasWorks(edge))
-                            {
-                                <span class="tag warn">Engineering works</span>
-                            }
-                            else
-                            {
-                                <span class="tag ok">Normal</span>
-                            }
-                        </td>
+                        <th>From</th>
+                        <th>To</th>
+                        <th>Line</th>
+                        <th class="num">Distance</th>
+                        <th class="num">Time</th>
+                        <th>Status</th>
                     </tr>
-                }
-            </tbody>
-        </table>
-    </div>
+                </thead>
+                <tbody>
+                    @foreach (var edge in FilteredEdges)
+                    {
+                        <tr>
+                            <td>@UiText.Station(edge.FromStation)</td>
+                            <td>@UiText.Station(edge.ToStation)</td>
+                            <td class="nowrap">@edge.LineName</td>
+                            <td class="num">@edge.DistanceKm.ToString("N0") km</td>
+                            <td class="num">@UiText.Duration(edge.Minutes)</td>
+                            <td>
+                                @if (HasWorks(edge))
+                                {
+                                    <span class="tag warn">Engineering works</span>
+                                }
+                                else
+                                {
+                                    <span class="tag ok">Normal</span>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
 
     <HowItWorks>
         Stations and connections are read from <code>Data/stations.csv</code> and <code>Data/connections.csv</code> at
@@ -80,8 +98,36 @@
 </section>
 
 @code {
+    private string _filter = "";
+    private bool _onlyWorks;
+
     private bool HasWorks(GraphConnection edge) =>
         Operations.HasEngineeringWorksAt(edge.FromStation) || Operations.HasEngineeringWorksAt(edge.ToStation);
 
     private int AffectedConnections => RoutePlanner.GraphEngine.Edges.Count(HasWorks);
+
+    private IReadOnlyList<GraphConnection> FilteredEdges =>
+        RoutePlanner.GraphEngine.Edges
+            .Where(e => !_onlyWorks || HasWorks(e))
+            .Where(MatchesFilter)
+            .ToList();
+
+    private bool MatchesFilter(GraphConnection edge)
+    {
+        if (string.IsNullOrWhiteSpace(_filter))
+            return true;
+
+        var term = _filter.Trim();
+        return UiText.Station(edge.FromStation).Contains(term, StringComparison.OrdinalIgnoreCase)
+            || UiText.Station(edge.ToStation).Contains(term, StringComparison.OrdinalIgnoreCase)
+            || edge.FromStation.Contains(term, StringComparison.OrdinalIgnoreCase)
+            || edge.ToStation.Contains(term, StringComparison.OrdinalIgnoreCase)
+            || edge.LineName.Contains(term, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void ClearFilter()
+    {
+        _filter = "";
+        _onlyWorks = false;
+    }
 }

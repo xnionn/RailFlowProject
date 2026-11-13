@@ -14,7 +14,9 @@ public sealed record PlannerFormSnapshot(
     string Destination,
     int Passengers,
     string OfferingKey,
-    DateTime TimestampUtc);
+    DateTime TimestampUtc,
+    DateOnly? TravelDate = null,
+    TimeOnly? Departure = null);
 
 /// <summary>
 /// Per-session state of the planner (one instance per browser tab): the search history as two immutable
@@ -31,7 +33,9 @@ public sealed class ImmutableAppStateContainer
         Destination: "ZURICH",
         Passengers: 2,
         OfferingKey: "HolidayWithMeals",
-        TimestampUtc: DateTime.UtcNow);
+        TimestampUtc: DateTime.UtcNow,
+        TravelDate: DateOnly.FromDateTime(DateTime.Today.AddDays(1)),
+        Departure: new TimeOnly(8, 0));
 
     public UserRole CurrentRole { get; private set; } = UserRole.Passenger;
 
@@ -59,7 +63,9 @@ public sealed class ImmutableAppStateContainer
         if (nextSnapshot.Origin == CurrentSnapshot.Origin &&
             nextSnapshot.Destination == CurrentSnapshot.Destination &&
             nextSnapshot.Passengers == CurrentSnapshot.Passengers &&
-            nextSnapshot.OfferingKey == CurrentSnapshot.OfferingKey)
+            nextSnapshot.OfferingKey == CurrentSnapshot.OfferingKey &&
+            nextSnapshot.TravelDate == CurrentSnapshot.TravelDate &&
+            nextSnapshot.Departure == CurrentSnapshot.Departure)
         {
             return;
         }

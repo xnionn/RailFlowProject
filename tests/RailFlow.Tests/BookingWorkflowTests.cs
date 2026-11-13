@@ -125,19 +125,115 @@ public class BookingWorkflowTests
     }
 
     [Fact]
-    public void ReceiptLineCodec_KeepsOwnerAndTravelDate_AndStillReadsOldLines()
+    public void ReceiptLineCodec_KeepsOwnerTravelDateTimesAndLegs_AndStillReadsOldLines()
     {
-        var original = Receipt("RF-OWN", 99m) with { Owner = "passenger", TravelDate = new DateOnly(2026, 12, 24) };
+        var legs = System.Collections.Immutable.ImmutableList.Create(
+            new RouteSegment("LONDON", "PARIS", 460, 135, "Eurostar"),
+            new RouteSegment("PARIS", "ZURICH", 490, 245, "TGV Lyria"));
+        var original = Receipt("RF-OWN", 99m) with
+        {
+            Owner = "passenger",
+            TravelDate = new DateOnly(2026, 12, 24),
+            DepartureTime = new TimeOnly(19, 30),
+            ArrivalTime = new TimeOnly(1, 55),
+            ArrivalDayOffset = 1,
+            Legs = legs
+        };
 
-        var parsed = Assert.IsType<Success<BookingReceipt>>(ReceiptLineCodec.FromLine(ReceiptLineCodec.ToLine(original))).Data;
+        var fullLine = ReceiptLineCodec.ToLine(original);
+        var parsed = Assert.IsType<Success<BookingReceipt>>(ReceiptLineCodec.FromLine(fullLine)).Data;
         Assert.Equal("passenger", parsed.Owner);
         Assert.Equal(new DateOnly(2026, 12, 24), parsed.TravelDate);
+        Assert.Equal(new TimeOnly(19, 30), parsed.DepartureTime);
+        Assert.Equal(new TimeOnly(1, 55), parsed.ArrivalTime);
+        Assert.Equal(1, parsed.ArrivalDayOffset);
+        Assert.NotNull(parsed.Legs);
+        Assert.Equal(legs, parsed.Legs);
 
-        // A line saved before the two fields existed: 11 fields, no owner, no travel date.
-        var oldLine = string.Join('|', ReceiptLineCodec.ToLine(original).Split('|').Take(11));
+        // A line saved before times and legs existed: 13 fields (with owner and travel date).
+        var line13 = string.Join('|', fullLine.Split('|').Take(13));
+        var parsed13 = Assert.IsType<Success<BookingReceipt>>(ReceiptLineCodec.FromLine(line13)).Data;
+        Assert.Equal("passenger", parsed13.Owner);
+        Assert.Equal(new DateOnly(2026, 12, 24), parsed13.TravelDate);
+        Assert.Null(parsed13.DepartureTime);
+        Assert.Null(parsed13.ArrivalTime);
+        Assert.Equal(0, parsed13.ArrivalDayOffset);
+        Assert.Null(parsed13.Legs);
+
+        // A line saved before owner and travel date existed: 11 fields.
+        var oldLine = string.Join('|', fullLine.Split('|').Take(11));
         var old = Assert.IsType<Success<BookingReceipt>>(ReceiptLineCodec.FromLine(oldLine)).Data;
         Assert.Equal("", old.Owner);
         Assert.Null(old.TravelDate);
+        Assert.Null(old.DepartureTime);
+        Assert.Null(old.Legs);
+    }
+
+    [Fact]
+    public void ReceiptLineCodec_RoundTripsLegs_WhenLineNameContainsTildeAndSemicolon_AndReadsLegacy17Format()
+    {
+        var specialLegs = System.Collections.Immutable.ImmutableList.Create(
+            new RouteSegment("LONDON", "PARIS", 460, 135, "Eurostar ~ Channel; Express"),
+            new RouteSegment("PARIS", "ZURICH", 490, 245, "TGV;Lyria~Direct"));
+        var original = Receipt("RF-DELIM", 250m) with
+        {
+            Owner = "passenger",
+            TravelDate = new DateOnly(2026, 12, 24),
+            DepartureTime = new TimeOnly(8, 0),
+            ArrivalTime = new TimeOnly(14, 20),
+            ArrivalDayOffset = 0,
+            Legs = specialLegs
+        };
+
+        var encoded = ReceiptLineCodec.ToLine(original);
+        var roundTripped = Assert.IsType<Success<BookingReceipt>>(ReceiptLineCodec.FromLine(encoded)).Data;
+        Assert.NotNull(roundTripped.Legs);
+        Assert.Equal(specialLegs, roundTripped.Legs);
+        Assert.Equal("Eurostar ~ Channel; Express", roundTripped.Legs[0].LineName);
+        Assert.Equal("TGV;Lyria~Direct", roundTripped.Legs[1].LineName);
+
+        // Legacy 17-field lines written with raw ~ and ; delimiters are still readable when valid.
+        var fields = encoded.Split('|');
+        fields[16] = "LONDON~PARIS~460~135~Eurostar;PARIS~ZURICH~490~245~TGV Lyria";
+        var legacy17 = Assert.IsType<Success<BookingReceipt>>(ReceiptLineCodec.FromLine(string.Join('|', fields))).Data;
+        Assert.NotNull(legacy17.Legs);
+        Assert.Equal(2, legacy17.Legs.Count);
+        Assert.Equal("Eurostar", legacy17.Legs[0].LineName);
+        Assert.Equal("TGV Lyria", legacy17.Legs[1].LineName);
+    }
+
+    [Fact]
+    public void Workflow_CapturesCompleteSnapshot_WithArrivalDayOffsetAndRouteLegs()
+    {
+        var itinerary = PriceLondonParis(); // 135 minutes
+        var gateway = new FakeGateway();
+        var draft = new BookingDraft(
+            itinerary,
+            Passengers: 2,
+            PassengerName: "Aigerim Sadykova",
+            Email: "aigerim@example.com",
+            Owner: "passenger",
+            TravelDate: new DateOnly(2026, 11, 20),
+            DepartureTime: new TimeOnly(23, 0));
+
+        var trace = BookingWorkflow.Run(draft, "", gateway.Charge, IssuedAt);
+
+        var receipt = Assert.IsType<Success<BookingReceipt>>(trace.Receipt).Data;
+        Assert.Equal(new DateOnly(2026, 11, 20), receipt.TravelDate);
+        Assert.Equal(new TimeOnly(23, 0), receipt.DepartureTime);
+        Assert.Equal(new TimeOnly(1, 15), receipt.ArrivalTime);
+        Assert.Equal(1, receipt.ArrivalDayOffset);
+        Assert.NotNull(receipt.Legs);
+        Assert.Single(receipt.Legs);
+        Assert.Equal("LONDON", receipt.Legs[0].FromStation);
+        Assert.Equal("PARIS", receipt.Legs[0].ToStation);
+
+        var plainText = TicketExportFactory.Create(TicketFormat.PlainText)(receipt);
+        Assert.Contains("Times        23:00 → 01:15 +1d", plainText);
+        Assert.Contains("Itinerary    London–Paris", plainText);
+
+        var csv = TicketExportFactory.Create(TicketFormat.Csv)(receipt);
+        Assert.Contains("2026-11-20,23:00,01:15,1,", csv);
     }
 
     [Theory]

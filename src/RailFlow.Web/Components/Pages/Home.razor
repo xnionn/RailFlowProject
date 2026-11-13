@@ -49,7 +49,7 @@
                     }
                     else
                     {
-                        <a class="btn btn-sm" href="login">Sign in</a>
+                        <a class="btn btn-sm" href="@LoginHrefFor(_activeTab)">Sign in</a>
                     }
                 </div>
             </div>
@@ -89,6 +89,7 @@
                          SearchedFrom="@_lastQuery?.Origin"
                          SearchedTo="@_lastQuery?.Destination"
                          PricedPassengers="_pricedPassengers"
+                         PricedSnapshot="_pricedSnapshot"
                          ValidationWarning="@_validationWarning"
                          @bind-SelectedStep="_selectedStep"
                          CanUndo="AppState.CanUndo"
@@ -111,14 +112,20 @@
                              Report="_lastReport"
                              PricedPassengers="_pricedPassengers"
                              SearchId="_searchId"
-                             TravelDate="_inputs.TravelDate"
+                             TravelDate="@(_pricedSnapshot?.TravelDate ?? _inputs.TravelDate)"
+                             DepartureTime="@(_pricedSnapshot?.Departure ?? _inputs.Departure)"
+                             IsStaleSearch="@(_pricedSnapshot is not null && !_inputs.Matches(_pricedSnapshot))"
+                             LoginHref="@LoginHrefFor("bookings")"
                              Owner="@_userName"
-                             Origin="@_inputs.Origin"
+                             Origin="@(_pricedSnapshot?.Origin ?? _inputs.Origin)"
                              OnPlanTrip='() => OpenTab("plan")' />
                 break;
 
             case "timetable":
-                <TimetableTab Route="PricedRoute" TravelDate="_inputs.TravelDate" Departure="_inputs.Departure" OnPlanTrip='() => OpenTab("plan")' />
+                <TimetableTab Route="PricedRoute"
+                              TravelDate="@(_pricedSnapshot?.TravelDate ?? _inputs.TravelDate)"
+                              Departure="@(_pricedSnapshot?.Departure ?? _inputs.Departure)"
+                              OnPlanTrip='() => OpenTab("plan")' />
                 break;
 
             case "network":
@@ -135,12 +142,6 @@
                 break;
         }
     </main>
-
-    <footer class="app-footer">
-        <div class="container">
-            RailFlow · final project for Introduction to Functional Programming · Astana IT University, 2026
-        </div>
-    </footer>
 </CascadingValue>
 </CascadingValue>
 
@@ -167,9 +168,28 @@
             .Concat(IsDispatcher ? DispatcherTabs : [])
             .Concat(_viewOptions.ShowCourseNotes ? CourseTabs : []);
 
-    // The open tab is part of the address (?tab=bookings), so links, reload and the browser's Back button work.
+    // The open tab and optional trip parameters are read from the address (?tab=bookings&from=MILAN&to=ZURICH...),
+    // so links, reload, sign-in redirects and the browser's Back button preserve the user's chosen trip.
     [SupplyParameterFromQuery(Name = "tab")]
     public string? Tab { get; set; }
+
+    [SupplyParameterFromQuery(Name = "from")]
+    public string? QueryFrom { get; set; }
+
+    [SupplyParameterFromQuery(Name = "to")]
+    public string? QueryTo { get; set; }
+
+    [SupplyParameterFromQuery(Name = "pax")]
+    public int? QueryPassengers { get; set; }
+
+    [SupplyParameterFromQuery(Name = "date")]
+    public string? QueryDate { get; set; }
+
+    [SupplyParameterFromQuery(Name = "dep")]
+    public string? QueryDeparture { get; set; }
+
+    [SupplyParameterFromQuery(Name = "pkg")]
+    public string? QueryPackage { get; set; }
 
     private string _activeTab = "plan";
     private readonly Dictionary<string, ElementReference> _tabButtons = new();
@@ -179,6 +199,7 @@
     // Trip search, used by several tabs
     private readonly PlannerInputs _inputs = new();
     private int _pricedPassengers = 2;
+    private PlannerFormSnapshot? _pricedSnapshot;
     private string? _validationWarning;
     private PipelineExecutionReport? _lastReport;
     private ValidRouteQuery? _lastQuery;
@@ -202,6 +223,9 @@
     private PlannedRoute? PricedRoute =>
         _lastReport?.Outcome is Something<PricedItinerary> { InnerValue: var it } ? it.TrafficRoute.Route : null;
 
+    private string LoginHrefFor(string tab) =>
+        PlannerInputs.BuildLoginHref(tab, _pricedSnapshot ?? _inputs.ToSnapshot(DateTime.UtcNow));
+
     protected override async Task OnInitializedAsync()
     {
         if (AuthenticationStateTask is not null)
@@ -219,7 +243,8 @@
         Operations.OnTrafficAlertBroadcast += HandleTrafficAlert;
 
         _inputs.LoadFrom(AppState.CurrentSnapshot);
-        ExecutePlannerPipelineInternal(commitHistory: false);
+        var restoredFromUrl = _inputs.ApplyQueryParameters(QueryFrom, QueryTo, QueryPassengers, QueryDate, QueryDeparture, QueryPackage);
+        ExecutePlannerPipelineInternal(commitHistory: restoredFromUrl);
     }
 
     // Runs on the first render and whenever the ?tab= part of the address changes (a click, Back, a link).
@@ -307,6 +332,12 @@
 
     private void ExecutePlannerPipelineInternal(bool commitHistory)
     {
+        if (_bookings.UnsavedPaidReceipt is not null)
+        {
+            _validationWarning = "A payment is waiting to be saved. Open Bookings and retry saving it before starting another search.";
+            return;
+        }
+
         var validation = RailwayPipelineOrchestrator.ValidateInput(
             _inputs.Origin, _inputs.Destination, _inputs.Passengers, _inputs.ToOffering());
 
@@ -329,13 +360,16 @@
         if (validation is not ValidRouteQuery query || _validationWarning is not null)
         {
             _lastReport = null;
+            _pricedSnapshot = null;
             _selectedStep = null;
             return;
         }
 
+        var snapshot = _inputs.ToSnapshot(DateTime.UtcNow);
         if (commitHistory)
-            AppState.CommitSnapshot(_inputs.ToSnapshot(DateTime.UtcNow));
+            AppState.CommitSnapshot(snapshot);
 
+        _pricedSnapshot = snapshot;
         _lastQuery = query;
         PriceQuery(query);
     }

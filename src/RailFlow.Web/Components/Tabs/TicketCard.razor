@@ -23,11 +23,84 @@
 
     @if (Receipt is not null)
     {
-        <pre class="output">@TicketExportFactory.Create(Format)(Receipt)</pre>
+        <div class="ticket-pass">
+            <div class="ticket-pass-head">
+                <div>
+                    <span class="ticket-label">Booking reference</span>
+                    <div class="ticket-ref"><code>@Receipt.BookingId</code></div>
+                </div>
+                <div class="ticket-paid">
+                    <span class="ticket-label">Paid</span>
+                    <strong>@UiText.Money(Receipt.AmountPaid, Receipt.Currency)</strong>
+                </div>
+            </div>
+
+            <div class="ticket-route-row">
+                <div>
+                    <span class="ticket-label">From</span>
+                    <strong class="ticket-station">@UiText.Station(Receipt.Origin)</strong>
+                    @if (Receipt.DepartureTime is { } dep)
+                    {
+                        <span class="ticket-time">@dep.ToString("HH:mm")</span>
+                    }
+                </div>
+                <span class="ticket-arrow" aria-hidden="true">→</span>
+                <div class="ticket-dest">
+                    <span class="ticket-label">To</span>
+                    <strong class="ticket-station">@UiText.Station(Receipt.Destination)</strong>
+                    @if (Receipt.ArrivalTime is { } arr)
+                    {
+                        <span class="ticket-time">@arr.ToString("HH:mm")@(Receipt.ArrivalDayOffset > 0 ? $" +{Receipt.ArrivalDayOffset}d" : "")</span>
+                    }
+                </div>
+            </div>
+
+            <dl class="ticket-meta-grid">
+                <div>
+                    <dt>Travel date</dt>
+                    <dd>@(Receipt.TravelDate is { } day ? UiText.Day(day) : "Open ticket")</dd>
+                </div>
+                <div>
+                    <dt>Lead passenger</dt>
+                    <dd>@Receipt.PassengerName (@UiText.Count(Receipt.Passengers, "passenger"))</dd>
+                </div>
+                <div>
+                    <dt>Package</dt>
+                    <dd>@Receipt.OfferingTitle</dd>
+                </div>
+                <div>
+                    <dt>Transaction</dt>
+                    <dd><code>@Receipt.TransactionId</code> · @Receipt.IssuedAtUtc.ToString("yyyy-MM-dd HH:mm") UTC</dd>
+                </div>
+            </dl>
+
+            @if (Receipt.Legs is { Count: > 0 } legs)
+            {
+                <div class="ticket-legs">
+                    <span class="ticket-label">Booked itinerary (@(legs.Count == 1 ? "Direct" : UiText.Count(legs.Count - 1, "change")))</span>
+                    <ul class="legs compact">
+                        @foreach (var seg in legs)
+                        {
+                            <li>
+                                <strong>@UiText.Station(seg.FromStation) → @UiText.Station(seg.ToStation)</strong>
+                                <span class="leg-info">@seg.LineName · @seg.DistanceKm.ToString("N0") km · @UiText.Duration(seg.BaseMinutes)</span>
+                            </li>
+                        }
+                    </ul>
+                </div>
+            }
+        </div>
+
+        <details class="ticket-raw" open="@(Format != TicketFormat.PlainText || Options.ShowCourseNotes)">
+            <summary>Export file preview (@Format)</summary>
+            <pre class="output">@TicketExportFactory.Create(Format)(Receipt)</pre>
+        </details>
     }
     else
     {
-        <p class="muted">No booking selected. Your e-ticket appears here after you book.</p>
+        <div class="empty-state">
+            <p>No booking selected. Your e-ticket appears here after you book, or select a booking from the table below.</p>
+        </div>
     }
 
     <HowItWorks>
@@ -45,6 +118,9 @@
 
     [Parameter]
     public EventCallback<TicketFormat> FormatChanged { get; set; }
+
+    [CascadingParameter]
+    public ViewOptions Options { get; set; } = ViewOptions.Default;
 
     private string TicketDataUri(BookingReceipt receipt)
     {

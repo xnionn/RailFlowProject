@@ -294,17 +294,21 @@ public sealed class TabComponentTests : BunitContext
     }
 
     [Fact]
-    public void BookingsTab_Booking_ChargesOnce_AndShowsTheOwnBookingUnmasked()
+    public void BookingsTab_Booking_ChargesOnce_ShowsConfirmationAndTicket_AndGatesStagesBehindCourseNotes()
     {
         SeedJournal(StoredReceipt("RF-ABCDEF123", "Grace Hopper", 5));
         var report = PricedLondonParis();
         var state = new BookingsTabState();
         var gateway = Services.GetRequiredService<SimulatedPaymentGateway>();
+        var travelDate = DateOnly.FromDateTime(DateTime.Today.AddDays(2));
+        var departure = new TimeOnly(9, 15);
 
         var cut = Render<BookingsTab>(p => p
             .Add(c => c.State, state)
             .Add(c => c.Report, report)
             .Add(c => c.PricedPassengers, 1)
+            .Add(c => c.TravelDate, travelDate)
+            .Add(c => c.DepartureTime, departure)
             .Add(c => c.Origin, "LONDON")
             .AddCascadingValue(UserRole.Passenger));
 
@@ -312,15 +316,136 @@ public sealed class TabComponentTests : BunitContext
         cut.Find("#passengerEmail").Change("ada@example.com");
         cut.FindAll("button").Single(b => b.TextContent == "Confirm and pay").Click();
 
-        Assert.Equal(new[] { "Done", "Done", "Done", "Done" }, cut.FindAll("ol.steps.vertical .tag").Select(t => t.TextContent));
         Assert.Equal(1, gateway.SuccessfulCharges);
+        // After purchase, the editable form is replaced by the confirmation card and "Plan another trip" CTA.
+        Assert.Contains("Booking confirmed", cut.Find("h2").TextContent);
+        Assert.Empty(cut.FindAll("#passengerName"));
+        Assert.Contains(cut.FindAll("button"), b => b.TextContent == "Plan another trip");
         Assert.True(cut.FindAll("button").Single(b => b.TextContent == "Booked").HasAttribute("disabled"));
         Assert.DoesNotContain(cut.FindAll("button"), b => b.TextContent == "Confirm and pay");
 
+        // Technical 4-stage list is hidden on success unless Course notes are enabled.
+        Assert.Empty(cut.FindAll("ol.steps.vertical"));
+
         var ownId = Assert.Single(state.OwnBookingIds);
+        Assert.Contains(ownId, cut.Find(".ticket-pass").TextContent);
+        Assert.Contains("09:15", cut.Find(".ticket-pass").TextContent);
         Assert.Contains(ownId, cut.Find("pre.output").TextContent);
         Assert.Contains("Ada Lovelace", cut.Markup);
         Assert.DoesNotContain("Grace Hopper", cut.Markup);
+
+        // Enabling Course notes reveals the four-stage workflow list.
+        var withNotes = Render<BookingsTab>(p => p
+            .Add(c => c.State, state)
+            .Add(c => c.Report, report)
+            .Add(c => c.PricedPassengers, 1)
+            .Add(c => c.TravelDate, travelDate)
+            .Add(c => c.DepartureTime, departure)
+            .Add(c => c.Origin, "LONDON")
+            .AddCascadingValue(UserRole.Passenger)
+            .AddCascadingValue(new ViewOptions(ShowCourseNotes: true)));
+        Assert.Equal(new[] { "Done", "Done", "Done", "Done" }, withNotes.FindAll("ol.steps.vertical .tag").Select(t => t.TextContent));
+    }
+
+    [Fact]
+    public void BookingsTab_BookedTicket_RemainsIndependentOfSubsequentPlannerEdits()
+    {
+        var state = new BookingsTabState();
+        var travelDate = DateOnly.FromDateTime(DateTime.Today.AddDays(3));
+        var departure = new TimeOnly(8, 30);
+
+        var cut = Render<BookingsTab>(p => p
+            .Add(c => c.State, state)
+            .Add(c => c.Report, PricedLondonParis())
+            .Add(c => c.PricedPassengers, 2)
+            .Add(c => c.TravelDate, travelDate)
+            .Add(c => c.DepartureTime, departure)
+            .Add(c => c.Origin, "LONDON")
+            .AddCascadingValue(UserRole.Passenger));
+
+        cut.Find("#passengerName").Change("Ada Lovelace");
+        cut.Find("#passengerEmail").Change("ada@example.com");
+        cut.FindAll("button").Single(b => b.TextContent == "Confirm and pay").Click();
+
+        // Simulate later planner edits (different route, date, departure, passenger count).
+        var berlinVienna = Services.GetRequiredService<RailwayPipelineOrchestrator>()
+            .ExecutePipeline("BERLIN", "VIENNA", new StandardDayTrip("Single ticket", "One-way rail fare", false), 4);
+
+        cut.Render(p => p
+            .Add(c => c.Report, berlinVienna)
+            .Add(c => c.PricedPassengers, 4)
+            .Add(c => c.TravelDate, travelDate.AddDays(10))
+            .Add(c => c.DepartureTime, new TimeOnly(16, 45))
+            .Add(c => c.SearchId, 2)
+            .Add(c => c.Origin, "BERLIN"));
+
+        var ticket = cut.Find(".ticket-pass").TextContent;
+        Assert.Contains("London", ticket);
+        Assert.Contains("Paris", ticket);
+        Assert.Contains("08:30", ticket);
+        Assert.Contains("10:45", ticket);
+        Assert.Contains("2 passengers", ticket);
+        Assert.DoesNotContain("Berlin", ticket);
+    }
+
+    [Fact]
+    public void PlanTab_StaleSearchGuard_MarksEditedForm_AndBlocksBookingUntilSearchedAgain()
+    {
+        var inputs = new PlannerInputs
+        {
+            Origin = "LONDON",
+            Destination = "PARIS",
+            Passengers = 1,
+            OfferingKey = "DayTripSingle",
+            TravelDate = DateOnly.FromDateTime(DateTime.Today.AddDays(1)),
+            Departure = new TimeOnly(8, 0)
+        };
+        var snapshot = inputs.ToSnapshot(DateTime.UtcNow);
+        var searched = 0;
+
+        var cut = Render<PlanTab>(p => p
+            .Add(c => c.Inputs, inputs)
+            .Add(c => c.Report, PricedLondonParis())
+            .Add(c => c.PricedPassengers, 1)
+            .Add(c => c.PricedSnapshot, snapshot)
+            .Add(c => c.OnSearch, () => searched++));
+
+        var bookButton = cut.FindAll("button").Single(b => b.TextContent == "Book this trip");
+        Assert.False(bookButton.HasAttribute("disabled"));
+        Assert.DoesNotContain("Outdated quote", cut.Markup);
+
+        // Edit destination from Paris to Milan without running search.
+        cut.Find("#destination").Change("Milan");
+
+        Assert.Contains("Outdated quote", cut.Markup);
+        Assert.Contains("Form edited since last search", cut.Markup);
+        Assert.True(cut.FindAll("button").Single(b => b.TextContent == "Book this trip").HasAttribute("disabled"));
+
+        // Clicking "Update route and price" triggers a fresh search.
+        cut.FindAll("button").Single(b => b.TextContent == "Update route and price").Click();
+        Assert.Equal(1, searched);
+    }
+
+    [Fact]
+    public void BookingsTab_StaleSearch_PromptsReturnToPlanner_AndRefusesPayment()
+    {
+        var gateway = Services.GetRequiredService<SimulatedPaymentGateway>();
+        var planned = 0;
+
+        var cut = Render<BookingsTab>(p => p
+            .Add(c => c.State, new BookingsTabState { PassengerName = "Ada Lovelace", PassengerEmail = "ada@example.com" })
+            .Add(c => c.Report, PricedLondonParis())
+            .Add(c => c.PricedPassengers, 1)
+            .Add(c => c.IsStaleSearch, true)
+            .Add(c => c.OnPlanTrip, () => planned++)
+            .AddCascadingValue(UserRole.Passenger));
+
+        Assert.Contains("Trip form changed since your last search", cut.Markup);
+        Assert.DoesNotContain(cut.FindAll("button"), b => b.TextContent == "Confirm and pay");
+        Assert.Equal(0, gateway.SuccessfulCharges);
+
+        cut.FindAll("button").Single(b => b.TextContent == "Return to planner").Click();
+        Assert.Equal(1, planned);
     }
 
     [Fact]
@@ -353,7 +478,7 @@ public sealed class TabComponentTests : BunitContext
     // ----- NetworkTab, TimetableTab and LabTab -----
 
     [Fact]
-    public void NetworkTab_ListsEveryConnection_AndMarksTheOnesWithEngineeringWorks()
+    public void NetworkTab_ListsEveryConnection_MarksEngineeringWorks_AndSupportsFiltering()
     {
         var edges = Services.GetRequiredService<RailRoutePlanner>().GraphEngine.Edges;
         var withWorks = edges.Count(e => Operations.HasEngineeringWorksAt(e.FromStation) || Operations.HasEngineeringWorksAt(e.ToStation));
@@ -363,6 +488,14 @@ public sealed class TabComponentTests : BunitContext
         Assert.Equal(edges.Count, cut.FindAll("tbody tr").Count);
         Assert.Equal(withWorks, cut.FindAll("tbody .tag.warn").Count);
         Assert.True(withWorks > 0);
+
+        cut.Find("#networkFilter").Input("Eurostar");
+        Assert.All(cut.FindAll("tbody tr"), row => Assert.Contains("Eurostar", row.TextContent));
+
+        cut.Find("#networkFilter").Input("NoSuchStation");
+        Assert.Contains("No connections match your filter.", cut.Find(".empty-state").TextContent);
+        cut.FindAll("button").Single(b => b.TextContent == "Reset filter").Click();
+        Assert.Equal(edges.Count, cut.FindAll("tbody tr").Count);
     }
 
     private static readonly PlannedRoute ParisLyon = new("PARIS", "LYON",
@@ -378,7 +511,7 @@ public sealed class TabComponentTests : BunitContext
     }
 
     [Fact]
-    public void TimetableTab_FollowsTheRouteAndDepartureTime()
+    public void TimetableTab_FollowsTheRouteAndDepartureTime_AndCollapsesProgressUnlessCourseNotesAreOn()
     {
         var cut = Render<TimetableTab>(p => p
             .Add(c => c.Route, ParisLyon)
@@ -389,12 +522,20 @@ public sealed class TabComponentTests : BunitContext
         Assert.Contains("Paris", stops[0].TextContent);
         Assert.Contains("11:30", stops[1].TextContent);
 
+        // Journey progress is collapsed by default and opens when Course notes are switched on.
+        Assert.False(cut.Find("details.progress-details").HasAttribute("open"));
+
         // The journey progress ends at the arrival time shown in the timetable.
         Assert.Contains("11:30", cut.FindAll(".card")[1].QuerySelectorAll("tbody tr").Last().TextContent);
 
         cut.Render(p => p.Add(c => c.Departure, new TimeOnly(10, 0)));
-
         Assert.Contains("12:00", cut.FindAll(".card").First().QuerySelectorAll("tbody tr")[1].TextContent);
+
+        var withNotes = Render<TimetableTab>(p => p
+            .Add(c => c.Route, ParisLyon)
+            .Add(c => c.Departure, new TimeOnly(10, 0))
+            .AddCascadingValue(new ViewOptions(ShowCourseNotes: true)));
+        Assert.True(withNotes.Find("details.progress-details").HasAttribute("open"));
     }
 
     [Fact]
@@ -517,5 +658,156 @@ public sealed class TabComponentTests : BunitContext
 
         var lastProgressRow = cut.FindAll(".card")[1].QuerySelectorAll("tbody tr").Last();
         Assert.Contains("01:30 +1d", lastProgressRow.TextContent);
+    }
+
+    [Fact]
+    public void BookingsTab_JournalLoadSucceeds_ButAppendFailsAfterPayment_ShowsPersistentRecoveryError_NeverFakeConfirmation_AndRetriesWithoutRecharging()
+    {
+        var allowAppend = false;
+        var realJournal = BookingJournalFactory.Create(JournalFormat.Json, _bookingDirectory);
+        var flakyJournal = new AppendControllableJournal(realJournal, () => allowAppend);
+        Services.AddSingleton<Func<JournalFormat, IBookingJournal>>(_ => _ => flakyJournal);
+
+        var state = new BookingsTabState();
+        var gateway = Services.GetRequiredService<SimulatedPaymentGateway>();
+        var report = PricedLondonParis();
+
+        // Course notes OFF by default: the error and stage failure must still be visible.
+        var cut = Render<BookingsTab>(p => p
+            .Add(c => c.State, state)
+            .Add(c => c.Report, report)
+            .Add(c => c.PricedPassengers, 1)
+            .Add(c => c.SearchId, 10)
+            .Add(c => c.Origin, "LONDON")
+            .AddCascadingValue(UserRole.Passenger));
+
+        cut.Find("#passengerName").Change("Ada Lovelace");
+        cut.Find("#passengerEmail").Change("ada@example.com");
+        cut.FindAll("button").Single(b => b.TextContent == "Confirm and pay").Click();
+
+        Assert.Equal(1, gateway.SuccessfulCharges);
+        Assert.NotNull(state.UnsavedPaidReceipt);
+        var txId = state.UnsavedPaidReceipt!.TransactionId;
+
+        // Must NOT show "Booking confirmed" or "ticket is ready", and must NOT show a fake saved ticket.
+        Assert.Equal("Payment taken — booking not saved", cut.Find("h2").TextContent);
+        Assert.DoesNotContain("Booking confirmed", cut.Markup);
+        Assert.DoesNotContain("Your ticket is ready", cut.Markup);
+        Assert.Contains("Payment succeeded, but the booking could not be saved", cut.Find(".booking-unsaved .alert.err").TextContent);
+        Assert.Contains(txId, cut.Find(".booking-unsaved").TextContent);
+        Assert.NotEmpty(cut.FindAll("ol.steps.vertical li.step.err"));
+        Assert.Empty(cut.FindAll(".ticket-pass"));
+
+        // Navigating away/back or repricing the same search preserves the error and does not allow double charging.
+        var remounted = Render<BookingsTab>(p => p
+            .Add(c => c.State, state)
+            .Add(c => c.Report, PricedLondonParis())
+            .Add(c => c.PricedPassengers, 1)
+            .Add(c => c.SearchId, 10)
+            .Add(c => c.Origin, "LONDON")
+            .AddCascadingValue(UserRole.Passenger));
+
+        Assert.Equal("Payment taken — booking not saved", remounted.Find("h2").TextContent);
+        Assert.Contains(txId, remounted.Find(".booking-unsaved").TextContent);
+        Assert.DoesNotContain(remounted.FindAll("button"), b => b.TextContent == "Confirm and pay");
+        Assert.Equal(1, gateway.SuccessfulCharges);
+
+        // A dirty form or failed repricing must not hide recovery for an already-taken payment.
+        var stale = Render<BookingsTab>(p => p
+            .Add(c => c.State, state)
+            .Add(c => c.SearchId, 10)
+            .Add(c => c.IsStaleSearch, true));
+        Assert.Contains(txId, stale.Find(".booking-unsaved").TextContent);
+        Assert.Contains(stale.FindAll("button"), b => b.TextContent == "Retry saving booking");
+
+        // Once storage recovers, clicking "Retry saving booking" saves the existing receipt without charging again.
+        allowAppend = true;
+        remounted.FindAll("button").Single(b => b.TextContent == "Retry saving booking").Click();
+
+        Assert.Equal(1, gateway.SuccessfulCharges);
+        Assert.Equal("Booking confirmed", remounted.Find("h2").TextContent);
+        Assert.Contains(state.BookedReceipt!.BookingId, remounted.Find(".booking-confirmed").TextContent);
+        Assert.Contains(state.BookedReceipt.BookingId, remounted.Find(".ticket-pass").TextContent);
+    }
+
+    [Fact]
+    public void BookingsTab_ConfirmationUsesImmutableBookedReceipt_WhenOlderHistoryRowIsSelected_OrAfterOperationsReprice()
+    {
+        var older = StoredReceipt("RF-OLDHIST01", "Ada Lovelace", 60) with
+        {
+            Owner = "passenger",
+            Origin = "BERLIN",
+            Destination = "VIENNA",
+            OfferingTitle = "Grand tour",
+            Passengers = 4,
+            AmountPaid = 999.99m,
+            TravelDate = new DateOnly(2026, 12, 1),
+            DepartureTime = new TimeOnly(14, 0)
+        };
+        SeedJournal(older);
+
+        var state = new BookingsTabState();
+        var travelDate = DateOnly.FromDateTime(DateTime.Today.AddDays(4));
+        var departure = new TimeOnly(10, 30);
+
+        var cut = Render<BookingsTab>(p => p
+            .Add(c => c.State, state)
+            .Add(c => c.Report, PricedLondonParis())
+            .Add(c => c.PricedPassengers, 2)
+            .Add(c => c.SearchId, 5)
+            .Add(c => c.TravelDate, travelDate)
+            .Add(c => c.DepartureTime, departure)
+            .Add(c => c.Owner, "passenger")
+            .Add(c => c.Origin, "LONDON")
+            .AddCascadingValue(UserRole.Passenger));
+
+        cut.Find("#passengerName").Change("Ada Lovelace");
+        cut.Find("#passengerEmail").Change("ada@example.com");
+        cut.FindAll("button").Single(b => b.TextContent == "Confirm and pay").Click();
+
+        var newBookingId = state.BookedReceipt!.BookingId;
+        var paidAmount = RailFlow.Web.UiText.Money(state.BookedReceipt.AmountPaid, state.BookedReceipt.Currency);
+        Assert.NotEqual("RF-OLDHIST01", newBookingId);
+
+        // Select the older booking in the history table.
+        var oldRow = cut.FindAll("tbody tr").Single(r => r.TextContent.Contains("RF-OLDHIST01"));
+        oldRow.Click();
+
+        // Ticket preview updates to the selected history booking, while confirmation keeps the new booking's ID, route and paid amount.
+        Assert.Contains("RF-OLDHIST01", cut.Find(".ticket-pass").TextContent);
+        var confirmedBanner = cut.Find(".booking-confirmed").TextContent;
+        Assert.Contains(newBookingId, confirmedBanner);
+        Assert.DoesNotContain("RF-OLDHIST01", confirmedBanner);
+        Assert.Contains("London → Paris", confirmedBanner);
+        Assert.Contains(paidAmount, confirmedBanner);
+
+        // Simulate operations price change and re-render with updated report/parameters.
+        Operations.ToggleEngineeringWorks("PARIS", "Dispatcher");
+        var repriced = Services.GetRequiredService<RailwayPipelineOrchestrator>()
+            .ExecutePipeline("LONDON", "PARIS", new RailHoliday("Grand tour", "5 nights", new HotelNights(5), HotelTier.Luxury), 5);
+
+        cut.Render(p => p
+            .Add(c => c.Report, repriced)
+            .Add(c => c.PricedPassengers, 5));
+
+        confirmedBanner = cut.Find(".booking-confirmed").TextContent;
+        Assert.Contains(newBookingId, confirmedBanner);
+        Assert.Contains("2 passengers", confirmedBanner);
+        Assert.Contains("Single ticket", confirmedBanner);
+        Assert.Contains(paidAmount, confirmedBanner);
+    }
+
+    private sealed class AppendControllableJournal(IBookingJournal inner, Func<bool> allowAppend) : IBookingJournal
+    {
+        public JournalFormat Format => inner.Format;
+
+        public string FilePath => inner.FilePath;
+
+        public Result<JournalContents> LoadAll() => inner.LoadAll();
+
+        public Result<int> Append(IEnumerable<BookingReceipt> receipts) =>
+            allowAppend()
+                ? inner.Append(receipts)
+                : Result.Fail<int>("Disk write denied while saving bookings.json.");
     }
 }

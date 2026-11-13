@@ -10,79 +10,147 @@
     <section class="card">
         <div class="card-head">
             <div>
-                <h2>New booking</h2>
-                <p class="card-sub">Books the trip from your last search.</p>
+                <h2>@(IsBookedForCurrentSearch ? "Booking confirmed" : IsPaidButUnsavedForCurrentSearch ? "Payment taken — booking not saved" : "New booking")</h2>
+                <p class="card-sub">@(IsBookedForCurrentSearch ? "Your ticket is ready alongside this confirmation." : IsPaidButUnsavedForCurrentSearch ? "Your card was charged, but writing to the booking file failed." : "Books the trip from your last search.")</p>
             </div>
         </div>
 
-        @if (Report?.Outcome is Something<PricedItinerary> { InnerValue: var bookable })
+        @if (IsPaidButUnsavedForCurrentSearch && State.UnsavedPaidReceipt is { } unsaved)
+        {
+            <div class="booking-unsaved" role="alert">
+                <div class="alert err" style="margin-top:0;">
+                    <strong>Payment succeeded, but the booking could not be saved</strong>
+                    <p>
+                        Transaction <code>@unsaved.TransactionId</code> (booking reference <code>@unsaved.BookingId</code>, @UiText.Money(unsaved.AmountPaid, unsaved.Currency))
+                        was charged for @UiText.Station(unsaved.Origin) → @UiText.Station(unsaved.Destination), but saving to storage failed@(string.IsNullOrWhiteSpace(State.UnsavedStorageReason) ? "." : $": {State.UnsavedStorageReason}")
+                        Keep reference <code>@unsaved.TransactionId</code>; you will not be charged again for this trip.
+                    </p>
+                </div>
+                <StageList Stages="State.Stages" />
+                <div class="actions">
+                    <button class="btn btn-primary" @onclick="RetrySavePaidBooking">Retry saving booking</button>
+                    <button class="btn" @onclick="() => OnPlanTrip.InvokeAsync()">Plan another trip</button>
+                    <button class="btn" disabled>Payment already taken</button>
+                </div>
+            </div>
+        }
+        else if (IsStaleSearch)
+        {
+            <div class="alert warn" role="status" style="margin-top:0; margin-bottom:0.75rem;">
+                <strong>Trip form changed since your last search</strong>
+                <p>Return to <strong>Plan a trip</strong> and run a fresh search so the route, times and price match your edits before you book.</p>
+                <div class="actions">
+                    <button class="btn btn-sm btn-primary" @onclick="() => OnPlanTrip.InvokeAsync()">Return to planner</button>
+                </div>
+            </div>
+        }
+        else if (Report?.Outcome is Something<PricedItinerary> { InnerValue: var bookable })
         {
             var route = bookable.TrafficRoute.Route;
-            <p class="trip-meta" style="margin-bottom:0.75rem;">
-                <strong>@UiText.Station(route.Origin) → @UiText.Station(route.Destination)</strong> ·
-                @UiText.Day(TravelDate) · @bookable.Offering.Title · @UiText.Count(PricedPassengers, "passenger")
-            </p>
+            var arrivalStop = RecursiveTimetable.BuildTimetable(route, DepartureTime)[^1];
+            var arrivalText = $"{arrivalStop.Arrival:HH:mm}{(arrivalStop.DayOffset > 0 ? $" +{arrivalStop.DayOffset}d" : "")}";
 
-            <div class="form-grid">
-                <div class="field">
-                    <label for="passengerName">Lead passenger <span class="required" aria-hidden="true">*</span></label>
-                    <input id="passengerName" @bind="State.PassengerName" autocomplete="name" required aria-required="true" />
+            @if (IsBookedForCurrentSearch && State.BookedReceipt is { } confirmed)
+            {
+                var confirmedArrival = confirmed.ArrivalTime is { } cArr
+                    ? $"{cArr:HH:mm}{(confirmed.ArrivalDayOffset > 0 ? $" +{confirmed.ArrivalDayOffset}d" : "")}"
+                    : arrivalText;
+                var confirmedDep = (confirmed.DepartureTime ?? DepartureTime).ToString("HH:mm");
+                var confirmedDay = UiText.Day(confirmed.TravelDate ?? TravelDate);
+
+                <div class="booking-confirmed" role="status">
+                    <div class="alert ok" style="margin-top:0;">
+                        <strong>Booking @confirmed.BookingId</strong>
+                        <p>
+                            @UiText.Station(confirmed.Origin) → @UiText.Station(confirmed.Destination) on @confirmedDay
+                            (@confirmedDep → @confirmedArrival) · @confirmed.OfferingTitle · @UiText.Count(confirmed.Passengers, "passenger") · Paid @UiText.Money(confirmed.AmountPaid, confirmed.Currency).
+                        </p>
+                    </div>
+                    <div class="actions">
+                        <button class="btn btn-primary" @onclick="() => OnPlanTrip.InvokeAsync()">Plan another trip</button>
+                        <button class="btn" disabled>Booked</button>
+                    </div>
                 </div>
-                <div class="field">
-                    <label for="passengerEmail">E-mail <span class="required" aria-hidden="true">*</span></label>
-                    <input id="passengerEmail" type="email" @bind="State.PassengerEmail" autocomplete="email" required aria-required="true" />
+            }
+            else
+            {
+                <div class="checkout-summary">
+                    <div class="checkout-route">
+                        <strong>@UiText.Station(route.Origin) → @UiText.Station(route.Destination)</strong>
+                        <span>@bookable.Offering.Title · @UiText.Count(PricedPassengers, "passenger")</span>
+                    </div>
+                    <div class="checkout-times">
+                        <span><strong>@UiText.Day(TravelDate)</strong></span>
+                        <span>Departs <strong>@DepartureTime.ToString("HH:mm")</strong> · Arrives <strong>@arrivalText</strong></span>
+                    </div>
                 </div>
-                <div class="field">
-                    <label for="promoCode">Promo code <span class="muted">(optional)</span></label>
-                    <input id="promoCode" @bind="State.PromoCode" @bind:event="oninput" autocomplete="off" />
+
+                @if (Owner.Length == 0 && !IsDispatcher)
+                {
+                    <p class="guest-checkout-note small muted">
+                        Booking as a guest keeps this ticket in the current browser session only.
+                        <a href="@EffectiveLoginHref">Sign in before paying</a> to save it to your account.
+                    </p>
+                }
+
+                <div class="form-grid">
+                    <div class="field">
+                        <label for="passengerName">Lead passenger <span class="required" aria-hidden="true">*</span></label>
+                        <input id="passengerName" @bind="State.PassengerName" autocomplete="name" required aria-required="true" />
+                    </div>
+                    <div class="field">
+                        <label for="passengerEmail">E-mail <span class="required" aria-hidden="true">*</span></label>
+                        <input id="passengerEmail" type="email" @bind="State.PassengerEmail" autocomplete="email" required aria-required="true" />
+                    </div>
+                    <div class="field">
+                        <label for="promoCode">Promo code <span class="muted">(optional)</span></label>
+                        <input id="promoCode" @bind="State.PromoCode" @bind:event="oninput" autocomplete="off" />
+                        @if (Options.ShowCourseNotes)
+                        {
+                            <span class="field-hint">Demo codes: STUDENT10, RAILFLOW20</span>
+                        }
+                    </div>
                     @if (Options.ShowCourseNotes)
                     {
-                        <span class="field-hint">Demo codes: STUDENT10, RAILFLOW20</span>
+                        <div class="field">
+                            <label for="journalFormat">Save to</label>
+                            <select id="journalFormat" @bind="State.JournalFormat" @bind:after="ReloadHistory">
+                                <option value="@JournalFormat.Json">JSON file (bookings.json)</option>
+                                <option value="@JournalFormat.TextLog">Text file (bookings.log)</option>
+                            </select>
+                        </div>
                     }
                 </div>
-                @if (Options.ShowCourseNotes)
-                {
-                    <div class="field">
-                        <label for="journalFormat">Save to</label>
-                        <select id="journalFormat" @bind="State.JournalFormat" @bind:after="ReloadHistory">
-                            <option value="@JournalFormat.Json">JSON file (bookings.json)</option>
-                            <option value="@JournalFormat.TextLog">Text file (bookings.log)</option>
-                        </select>
-                    </div>
-                }
-            </div>
 
-            @switch (BookingWorkflow.Quote(bookable.FinalPrice, State.PromoCode))
-            {
-                case Success<FareQuote> { Data: var quote }:
-                    <table class="breakdown">
-                        <tbody>
-                            <tr><td>Trip</td><td>@UiText.Money(quote.Fare, bookable.Currency)</td></tr>
-                            @if (quote.Discount > 0)
-                            {
-                                <tr><td>Promo @quote.PromoCode (−@((quote.DiscountRate * 100).ToString("0"))%)</td><td>@UiText.Money(-quote.Discount, bookable.Currency)</td></tr>
-                            }
-                            <tr><td>Booking fee</td><td>+@UiText.Money(quote.ServiceFee, bookable.Currency)</td></tr>
-                            <tr class="total"><td>To pay</td><td>@UiText.Money(quote.AmountDue, bookable.Currency)</td></tr>
-                        </tbody>
-                    </table>
-                    break;
-                case Failure<FareQuote> { Reason: var reason }:
-                    <div class="alert warn" role="status">@reason</div>
-                    break;
-            }
-
-            <div class="actions">
-                @if (State.BookedSearchId == SearchId)
+                @switch (BookingWorkflow.Quote(bookable.FinalPrice, State.PromoCode))
                 {
-                    <button class="btn btn-primary" disabled>Booked</button>
-                    <span class="muted small">This trip is booked. Search again to book another one.</span>
+                    case Success<FareQuote> { Data: var quote }:
+                        <table class="breakdown">
+                            <tbody>
+                                <tr><td>Trip</td><td>@UiText.Money(quote.Fare, bookable.Currency)</td></tr>
+                                @if (quote.Discount > 0)
+                                {
+                                    <tr><td>Promo @quote.PromoCode (−@((quote.DiscountRate * 100).ToString("0"))%)</td><td>@UiText.Money(-quote.Discount, bookable.Currency)</td></tr>
+                                }
+                                <tr><td>Booking fee</td><td>+@UiText.Money(quote.ServiceFee, bookable.Currency)</td></tr>
+                                <tr class="total"><td>To pay</td><td>@UiText.Money(quote.AmountDue, bookable.Currency)</td></tr>
+                            </tbody>
+                        </table>
+                        break;
+                    case Failure<FareQuote> { Reason: var reason }:
+                        <div class="alert warn" role="status">@reason</div>
+                        break;
                 }
-                else
-                {
+
+                <div class="actions">
                     <button class="btn btn-primary" @onclick="PlaceBooking">Confirm and pay</button>
+                </div>
+
+                @if (HasStageFailure)
+                {
+                    <StageList Stages="State.Stages" />
                 }
-            </div>
+            }
         }
         else
         {
@@ -92,7 +160,10 @@
             </div>
         }
 
-        <StageList Stages="State.Stages" />
+        @if (Options.ShowCourseNotes && !HasStageFailure)
+        {
+            <StageList Stages="State.Stages" />
+        }
 
         <HowItWorks>
             Every stage has its own record type: <code>BookingDraft → ValidatedBooking → PricedBooking → BookingReceipt</code>.
@@ -116,9 +187,13 @@
                     {
                         <text>Stored in <code>@Path.GetFileName(JournalFactory(State.JournalFormat).FilePath)</code></text>
                     }
+                    else if (Owner.Length > 0)
+                    {
+                        <text>Bookings saved to your account (@Owner).</text>
+                    }
                     else
                     {
-                        <text>@(Owner.Length > 0 ? "Bookings made with your account." : "Bookings made in this browser tab. Sign in to keep them.")</text>
+                        <text>Guest bookings are visible only in this browser session and do not transfer on sign-in. <a href="@EffectiveLoginHref">Sign in before purchasing</a> to link future bookings to an account.</text>
                     }
                 </p>
             </div>
@@ -148,7 +223,9 @@
 
         @if (VisibleHistory.Count == 0)
         {
-            <p class="muted">@(IsDispatcher ? "No bookings have been saved yet." : "You have not booked anything yet.")</p>
+            <div class="empty-state">
+                <p>@(IsDispatcher ? "No bookings have been saved yet." : "You have not booked anything yet.")</p>
+            </div>
         }
         else
         {
@@ -176,9 +253,11 @@
                                 <td><code>@r.BookingId</code></td>
                                 <td>@r.PassengerName <span class="muted">(@r.Passengers)</span></td>
                                 <td class="nowrap">@UiText.Station(r.Origin) → @UiText.Station(r.Destination)</td>
-                                <td class="nowrap">@(r.TravelDate is { } day ? day.ToString("d MMM yyyy") : "—")</td>
+                                <td class="nowrap">
+                                    @(r.TravelDate is { } day ? day.ToString("d MMM yyyy", System.Globalization.CultureInfo.InvariantCulture) : "—")@(r.DepartureTime is { } dep ? $", {dep.ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture)}" : "")
+                                </td>
                                 <td class="num">@UiText.Money(r.AmountPaid, r.Currency)</td>
-                                <td class="nowrap">@r.IssuedAtUtc.ToString("d MMM yyyy, HH:mm")</td>
+                                <td class="nowrap">@r.IssuedAtUtc.ToString("d MMM yyyy, HH:mm", System.Globalization.CultureInfo.InvariantCulture)</td>
                             </tr>
                         }
                     </tbody>
@@ -219,6 +298,18 @@
     [Parameter]
     public DateOnly TravelDate { get; set; } = DateOnly.FromDateTime(DateTime.Today);
 
+    /// <summary>Departure time chosen on the planner; stored with the booking.</summary>
+    [Parameter]
+    public TimeOnly DepartureTime { get; set; } = new(8, 0);
+
+    /// <summary>True when the planner form was edited after the last search.</summary>
+    [Parameter]
+    public bool IsStaleSearch { get; set; }
+
+    /// <summary>Sign-in link carrying the current trip parameters so signing in returns to the same trip.</summary>
+    [Parameter]
+    public string? LoginHref { get; set; }
+
     /// <summary>User name of the signed-in account, or "" for a guest. Stored with the booking.</summary>
     [Parameter]
     public string Owner { get; set; } = "";
@@ -240,6 +331,17 @@
 
     private bool IsDispatcher => Role == UserRole.Dispatcher;
 
+    private bool IsBookedForCurrentSearch =>
+        State.BookedSearchId == SearchId && State.BookedReceipt is not null;
+
+    private bool IsPaidButUnsavedForCurrentSearch =>
+        State.ChargedSearchId == SearchId && State.BookedSearchId != SearchId && State.UnsavedPaidReceipt is not null;
+
+    private bool HasStageFailure => State.Stages.Any(s => s.Status == StageStatus.Failed);
+
+    private string EffectiveLoginHref =>
+        !string.IsNullOrWhiteSpace(LoginHref) ? LoginHref! : "login?ReturnUrl=%2F%3Ftab%3Dbookings";
+
     private JournalFormat OtherFormat =>
         State.JournalFormat == JournalFormat.Json ? JournalFormat.TextLog : JournalFormat.Json;
 
@@ -253,11 +355,11 @@
 
     private void PlaceBooking()
     {
-        if (Report?.Outcome is not Something<PricedItinerary> { InnerValue: var itinerary })
+        if (IsStaleSearch || Report?.Outcome is not Something<PricedItinerary> { InnerValue: var itinerary })
             return;
 
-        // A second click on the same quote must not charge the card twice.
-        if (State.BookedSearchId == SearchId)
+        // A second click on the same quote must not charge the card twice, even if saving failed after payment.
+        if (State.ChargedSearchId == SearchId || State.BookedSearchId == SearchId)
             return;
 
         var journal = JournalFactory(State.JournalFormat);
@@ -272,7 +374,7 @@
             return;
         }
 
-        var draft = new BookingDraft(itinerary, PricedPassengers, State.PassengerName, State.PassengerEmail, Owner, TravelDate);
+        var draft = new BookingDraft(itinerary, PricedPassengers, State.PassengerName, State.PassengerEmail, Owner, TravelDate, DepartureTime);
         var trace = BookingWorkflow.Run(draft, State.PromoCode, PaymentGateway.Charge, DateTime.UtcNow);
 
         // Save only on the success track; storage problems come back as Failure too.
@@ -292,23 +394,62 @@
             Stage("Save booking", stored, r => $"Booking {r.BookingId} confirmed",
                 previousFailed: !trace.Receipt.IsSuccess()));
 
-        // Once the card is charged this search is done, even if saving failed afterwards:
-        // a second click must not take the money again.
-        if (trace.Receipt is Success<BookingReceipt>)
-            State.BookedSearchId = SearchId;
-
-        if (trace.Receipt is Success<BookingReceipt> { Data: var paid } && stored is Failure<BookingReceipt>)
-            State.Stages = State.Stages.SetItem(3, new StageView("Save booking", StageStatus.Failed,
-                $"Payment {paid.TransactionId} went through but the booking could not be saved. Keep this reference; it is in the server log."));
+        // Once the card is charged, record ChargedSearchId immediately so a second click or a re-price
+        // cannot charge the card again.
+        if (trace.Receipt is Success<BookingReceipt> { Data: var paid })
+        {
+            State.ChargedSearchId = SearchId;
+            if (stored is Failure<BookingReceipt> { Reason: var saveError })
+            {
+                State.UnsavedPaidReceipt = paid;
+                State.UnsavedStorageReason = saveError;
+                State.Stages = State.Stages.SetItem(3, new StageView("Save booking", StageStatus.Failed,
+                    $"Payment {paid.TransactionId} went through but the booking could not be saved ({saveError}). Keep this reference; it is in the server log."));
+            }
+        }
 
         if (stored is Success<BookingReceipt> { Data: var saved })
         {
-            State.OwnBookingIds.Add(saved.BookingId);
-            State.SelectedReceipt = saved;
-            AppState.AppendFeedMessage($"New booking {saved.BookingId}: {UiText.Station(saved.Origin)} → {UiText.Station(saved.Destination)}, {UiText.Money(saved.AmountPaid)}.");
+            CompleteSavedBooking(saved);
         }
 
         ReloadHistory();
+    }
+
+    private void RetrySavePaidBooking()
+    {
+        if (!IsPaidButUnsavedForCurrentSearch || State.UnsavedPaidReceipt is not { } paid)
+            return;
+
+        var journal = JournalFactory(State.JournalFormat);
+        var stored = journal.Append([paid]).Map(_ => paid).Tap(Logger.BookingOutcome);
+
+        if (stored is Success<BookingReceipt> { Data: var saved })
+        {
+            if (State.Stages.Count == 4)
+                State.Stages = State.Stages.SetItem(3, new StageView("Save booking", StageStatus.Done, $"Booking {saved.BookingId} confirmed"));
+            CompleteSavedBooking(saved);
+        }
+        else if (stored is Failure<BookingReceipt> { Reason: var saveError })
+        {
+            State.UnsavedStorageReason = saveError;
+            if (State.Stages.Count == 4)
+                State.Stages = State.Stages.SetItem(3, new StageView("Save booking", StageStatus.Failed,
+                    $"Payment {paid.TransactionId} went through but the booking could not be saved ({saveError}). Keep this reference; it is in the server log."));
+        }
+
+        ReloadHistory();
+    }
+
+    private void CompleteSavedBooking(BookingReceipt saved)
+    {
+        State.BookedSearchId = SearchId;
+        State.BookedReceipt = saved;
+        State.UnsavedPaidReceipt = null;
+        State.UnsavedStorageReason = null;
+        State.OwnBookingIds.Add(saved.BookingId);
+        State.SelectedReceipt = saved;
+        AppState.AppendFeedMessage($"New booking {saved.BookingId}: {UiText.Station(saved.Origin)} → {UiText.Station(saved.Destination)}, {UiText.Money(saved.AmountPaid)}.");
     }
 
     private static StageView Stage<T>(string name, Result<T> result, Func<T, string> describe, bool previousFailed) =>
@@ -331,7 +472,8 @@
 
         if (State.SelectedReceipt is not null && !State.History.Contains(State.SelectedReceipt))
             State.SelectedReceipt = null;
-        State.SelectedReceipt ??= State.History.FirstOrDefault(CanSeeDetails);
+        if (!IsPaidButUnsavedForCurrentSearch)
+            State.SelectedReceipt ??= State.History.FirstOrDefault(CanSeeDetails);
     }
 
     private void SelectReceipt(BookingReceipt receipt)

@@ -1,3 +1,4 @@
+using System.Globalization;
 using RailFlow.Core.Domain;
 
 namespace RailFlow.Web;
@@ -16,7 +17,7 @@ public static class UiText
     public static string Station(string code) => StationNames.Display(code);
 
     /// <summary>"Fri 14 Nov 2026".</summary>
-    public static string Day(DateOnly day) => day.ToString("ddd d MMM yyyy");
+    public static string Day(DateOnly day) => day.ToString("ddd d MMM yyyy", CultureInfo.InvariantCulture);
 
     /// <summary>"45 min", "2 h 05 min".</summary>
     public static string Duration(int minutes) =>
