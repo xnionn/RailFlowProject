@@ -15,17 +15,27 @@ public sealed record BfsPathResult(
     int TotalMinutes);
 
 /// <summary>
-/// Implements the Breadth-First Search (BFS) shortest-hop/degrees-of-separation algorithm
-/// from Lecture L8_1 (Kevin Bacon Graph Search) paired with Thread-Safe Memoization.
+/// Breadth-first search for the route with the fewest changes between two stations,
+/// wrapped in a thread-safe memoized function so repeated searches are answered from the cache.
 /// </summary>
 public sealed class TransitGraphEngine
 {
     private readonly ImmutableList<GraphConnection> _edges;
+    private readonly ImmutableDictionary<string, ImmutableList<GraphConnection>> _adjacency;
     private readonly MemoizedFunc<(string Start, string End), Maybe<BfsPathResult>> _memoizedBfs;
 
     public TransitGraphEngine(IEnumerable<GraphConnection> edges)
     {
         _edges = edges.ToImmutableList();
+        // Built once: every connection can be travelled in both directions.
+        _adjacency = _edges
+            .SelectMany(e => new[]
+            {
+                e,
+                new GraphConnection(e.ToStation, e.FromStation, e.DistanceKm, e.Minutes, e.LineName)
+            })
+            .GroupBy(e => e.FromStation, StringComparer.OrdinalIgnoreCase)
+            .ToImmutableDictionary(g => g.Key, g => g.ToImmutableList(), StringComparer.OrdinalIgnoreCase);
         Func<(string Start, string End), Maybe<BfsPathResult>> rawSearch = pair =>
             ComputeBfsShortestPath(pair.Start, pair.End);
         _memoizedBfs = rawSearch.MemoizeThreadSafeWithStats();
@@ -41,7 +51,7 @@ public sealed class TransitGraphEngine
     public void ClearCache() => _memoizedBfs.Clear();
 
     /// <summary>
-    /// Pure Breadth-First Search (BFS) over the station adjacency graph (Lecture L8_1).
+    /// Pure Breadth-First Search (BFS) over the station adjacency graph.
     /// Explores layer-by-layer to find the minimum degrees of separation (station hops).
     /// </summary>
     private Maybe<BfsPathResult> ComputeBfsShortestPath(string start, string target)
@@ -55,14 +65,7 @@ public sealed class TransitGraphEngine
                 start, target, 0, ImmutableList.Create(start), ImmutableList<RouteSegment>.Empty, 0, 0));
         }
 
-        var adjacency = _edges
-            .SelectMany(e => new[]
-            {
-                e,
-                new GraphConnection(e.ToStation, e.FromStation, e.DistanceKm, e.Minutes, e.LineName)
-            })
-            .GroupBy(e => e.FromStation, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.ToImmutableList(), StringComparer.OrdinalIgnoreCase);
+        var adjacency = _adjacency;
 
         if (!adjacency.ContainsKey(start) || !adjacency.ContainsKey(target))
             return new UnhandledNothing<BfsPathResult>();

@@ -1,0 +1,324 @@
+@* "Bookings" tab: books the trip from the last search, shows the booking progress, the e-ticket and the
+   booking history. It receives the session's BookingsTabState (kept by Home so the form, the history and
+   the list of the user's own bookings survive switching tabs), the last search report with its passenger
+   count, the origin typed on the planner and an OnPlanTrip callback. The cascaded role decides what the
+   history shows: dispatchers see every booking and the revenue report, everyone else only the bookings
+   made in this session. The journal factory, the payment gateway and the app state (for the activity
+   feed) are injected because only this tab uses them. Opening the tab reloads the history. *@
+
+@inject Func<JournalFormat, IBookingJournal> JournalFactory
+@inject SimulatedPaymentGateway PaymentGateway
+@inject ImmutableAppStateContainer AppState
+
+<div class="grid-2">
+    <section class="card">
+        <div class="card-head">
+            <div>
+                <h2>New booking</h2>
+                <p class="card-sub">Books the trip from your last search.</p>
+            </div>
+        </div>
+
+        @if (Report?.Outcome is Something<PricedItinerary> { InnerValue: var bookable })
+        {
+            var route = bookable.TrafficRoute.Route;
+            <p class="trip-meta" style="margin-bottom:0.75rem;">
+                <strong>@UiText.Station(route.Origin) → @UiText.Station(route.Destination)</strong> ·
+                @bookable.Offering.Title · @UiText.Count(PricedPassengers, "passenger")
+            </p>
+
+            <div class="form-grid">
+                <div class="field">
+                    <label for="passengerName">Lead passenger <span class="required" aria-hidden="true">*</span></label>
+                    <input id="passengerName" @bind="State.PassengerName" autocomplete="name" required aria-required="true" />
+                </div>
+                <div class="field">
+                    <label for="passengerEmail">E-mail <span class="required" aria-hidden="true">*</span></label>
+                    <input id="passengerEmail" type="email" @bind="State.PassengerEmail" autocomplete="email" required aria-required="true" />
+                </div>
+                <div class="field">
+                    <label for="promoCode">Promo code <span class="muted">(optional)</span></label>
+                    <input id="promoCode" @bind="State.PromoCode" @bind:event="oninput" autocomplete="off" />
+                    @if (Options.ShowCourseNotes)
+                    {
+                        <span class="field-hint">Demo codes: STUDENT10, RAILFLOW20</span>
+                    }
+                </div>
+                @if (Options.ShowCourseNotes)
+                {
+                    <div class="field">
+                        <label for="journalFormat">Save to</label>
+                        <select id="journalFormat" @bind="State.JournalFormat" @bind:after="ReloadHistory">
+                            <option value="@JournalFormat.Json">JSON file (bookings.json)</option>
+                            <option value="@JournalFormat.TextLog">Text file (bookings.log)</option>
+                        </select>
+                    </div>
+                }
+            </div>
+
+            @switch (BookingWorkflow.Quote(bookable.FinalPrice, State.PromoCode))
+            {
+                case Success<FareQuote> { Data: var quote }:
+                    <table class="breakdown">
+                        <tbody>
+                            <tr><td>Trip</td><td>@UiText.Money(quote.Fare, bookable.Currency)</td></tr>
+                            @if (quote.Discount > 0)
+                            {
+                                <tr><td>Promo @quote.PromoCode (−@((quote.DiscountRate * 100).ToString("0"))%)</td><td>@UiText.Money(-quote.Discount, bookable.Currency)</td></tr>
+                            }
+                            <tr><td>Booking fee</td><td>+@UiText.Money(quote.ServiceFee, bookable.Currency)</td></tr>
+                            <tr class="total"><td>To pay</td><td>@UiText.Money(quote.AmountDue, bookable.Currency)</td></tr>
+                        </tbody>
+                    </table>
+                    break;
+                case Failure<FareQuote> { Reason: var reason }:
+                    <div class="alert warn" role="status">@reason</div>
+                    break;
+            }
+
+            <div class="actions">
+                @if (ReferenceEquals(State.BookedReport, Report))
+                {
+                    <button class="btn btn-primary" disabled>Booked</button>
+                    <span class="muted small">This trip is booked. Search again to book another one.</span>
+                }
+                else
+                {
+                    <button class="btn btn-primary" @onclick="PlaceBooking">Confirm and pay</button>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="empty-state">
+                <p>There is no trip to book yet. Search for a route first.</p>
+                <button class="btn btn-sm btn-primary" @onclick="() => OnPlanTrip.InvokeAsync()">Plan a trip</button>
+            </div>
+        }
+
+        <StageList Stages="State.Stages" />
+
+        <HowItWorks>
+            Every stage has its own record type: <code>BookingDraft → ValidatedBooking → PricedBooking → BookingReceipt</code>.
+            Each function takes the previous stage and returns <code>Result</code> of the next, so the steps cannot be
+            called in the wrong order. The price is a pipeline of small functions (discount, booking fee, rounding),
+            the same one <code>BookingWorkflow.Quote</code> uses for the preview above, and the payment gateway is
+            passed in as <code>Func&lt;decimal, Result&lt;string&gt;&gt;</code>.
+        </HowItWorks>
+    </section>
+
+    <TicketCard Receipt="State.SelectedReceipt" @bind-Format="State.TicketFormat" />
+</div>
+
+<div class="@(IsDispatcher ? "grid-2" : "")">
+    <section class="card">
+        <div class="card-head">
+            <div>
+                <h2>@(IsDispatcher ? "All bookings" : "Your bookings")</h2>
+                <p class="card-sub">
+                    @if (IsDispatcher)
+                    {
+                        <text>Stored in <code>@Path.GetFileName(JournalFactory(State.JournalFormat).FilePath)</code></text>
+                    }
+                    else
+                    {
+                        <text>Bookings made in this browser session.</text>
+                    }
+                </p>
+            </div>
+            @if (IsDispatcher)
+            {
+                <div class="inline">
+                    <button class="btn btn-sm" @onclick="ReloadHistory">Reload</button>
+                    <button class="btn btn-sm" title="Adds the bookings that are missing from the other file" @onclick="CopyToOtherJournal">
+                        Export to @(OtherFormat == JournalFormat.Json ? "bookings.json" : "bookings.log")
+                    </button>
+                </div>
+            }
+        </div>
+
+        @if (State.HistoryError is not null)
+        {
+            <div class="alert err" role="alert">@State.HistoryError</div>
+        }
+        @if (IsDispatcher && State.SkippedLines.Count > 0)
+        {
+            <div class="alert warn">@UiText.Count(State.SkippedLines.Count, "damaged line") in the file @(State.SkippedLines.Count == 1 ? "was" : "were") skipped.</div>
+        }
+        @if (!string.IsNullOrWhiteSpace(State.StorageMessage))
+        {
+            <div class="alert ok">@State.StorageMessage</div>
+        }
+
+        @if (VisibleHistory.Count == 0)
+        {
+            <p class="muted">@(IsDispatcher ? "No bookings have been saved yet." : "You have not booked anything yet.")</p>
+        }
+        else
+        {
+            <div class="table-wrap scroll" style="margin-top:0.75rem;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Booking</th>
+                            <th>Passenger</th>
+                            <th>Route</th>
+                            <th class="num">Paid</th>
+                            <th>Booked (UTC)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var r in VisibleHistory)
+                        {
+                            var isSelected = State.SelectedReceipt?.Equals(r) == true;
+                            <tr class="clickable @(isSelected ? "selected" : "")"
+                                tabindex="0"
+                                aria-selected="@(isSelected ? "true" : "false")"
+                                @onclick="() => SelectReceipt(r)"
+                                @onkeydown="e => SelectReceiptByKey(e, r)">
+                                <td><code>@r.BookingId</code></td>
+                                <td>@r.PassengerName <span class="muted">(@r.Passengers)</span></td>
+                                <td class="nowrap">@UiText.Station(r.Origin) → @UiText.Station(r.Destination)</td>
+                                <td class="num">@UiText.Money(r.AmountPaid, r.Currency)</td>
+                                <td class="nowrap">@r.IssuedAtUtc.ToString("d MMM yyyy, HH:mm")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+        <HowItWorks>
+            The text and JSON files both implement <code>IBookingJournal</code>. Appending never overwrites existing
+            bookings and skips ones already stored, because receipts are equal by booking id. A missing file is
+            simply an empty history; file errors come back as a <code>Failure</code> instead of an exception.
+        </HowItWorks>
+    </section>
+
+    @if (IsDispatcher)
+    {
+        <BookingReportCard History="State.History" Origin="@Origin" />
+    }
+</div>
+
+@code {
+    /// <summary>Kept by Home for the whole session; this component reads and updates it.</summary>
+    [Parameter, EditorRequired]
+    public BookingsTabState State { get; set; } = new();
+
+    /// <summary>The last search. Only a priced trip (Something) can be booked.</summary>
+    [Parameter]
+    public PipelineExecutionReport? Report { get; set; }
+
+    [Parameter]
+    public int PricedPassengers { get; set; }
+
+    /// <summary>The origin typed on the planner, used by the report.</summary>
+    [Parameter]
+    public string Origin { get; set; } = "";
+
+    /// <summary>"Plan a trip" button shown while there is nothing to book.</summary>
+    [Parameter]
+    public EventCallback OnPlanTrip { get; set; }
+
+    /// <summary>Cascaded by Home from the auth cookie; a missing value means Passenger.</summary>
+    [CascadingParameter]
+    public UserRole Role { get; set; }
+
+    [CascadingParameter]
+    public ViewOptions Options { get; set; } = ViewOptions.Default;
+
+    private bool IsDispatcher => Role == UserRole.DispatcherAdmin;
+
+    private JournalFormat OtherFormat =>
+        State.JournalFormat == JournalFormat.Json ? JournalFormat.TextLog : JournalFormat.Json;
+
+    /// <summary>Dispatchers see every stored booking; everyone else only the bookings made in this session.</summary>
+    private ImmutableList<BookingReceipt> VisibleHistory =>
+        IsDispatcher ? State.History : State.History.Where(CanSeeDetails).ToImmutableList();
+
+    protected override void OnInitialized() => ReloadHistory();
+
+    private bool CanSeeDetails(BookingReceipt receipt) => State.CanSeeDetails(receipt, IsDispatcher);
+
+    private void PlaceBooking()
+    {
+        if (Report?.Outcome is not Something<PricedItinerary> { InnerValue: var itinerary })
+            return;
+
+        // A second click on the same quote must not charge the card twice.
+        if (ReferenceEquals(State.BookedReport, Report))
+            return;
+
+        var journal = JournalFactory(State.JournalFormat);
+        var draft = new BookingDraft(itinerary, PricedPassengers, State.PassengerName, State.PassengerEmail);
+        var trace = BookingWorkflow.Run(draft, State.PromoCode, PaymentGateway.Charge, DateTime.UtcNow);
+
+        // Save only on the success track; storage problems come back as Failure too.
+        var stored = trace.Receipt.Bind(receipt => journal.Append([receipt]).Map(_ => receipt));
+
+        State.Stages = ImmutableList.Create(
+            Stage("Check details", trace.Validated, v => $"{v.PassengerName}, {v.Email}, {UiText.Count(v.Passengers, "passenger")}", previousFailed: false),
+            Stage("Apply discount", trace.Priced,
+                p => p.DiscountRate > 0
+                    ? $"{p.PromoCode}: −{p.DiscountRate * 100:0}%, to pay {UiText.Money(p.AmountDue)}"
+                    : $"No promo code, to pay {UiText.Money(p.AmountDue)}",
+                previousFailed: !trace.Validated.IsSuccess()),
+            Stage("Take payment", trace.Receipt, r => $"Paid, transaction {r.TransactionId}",
+                previousFailed: !trace.Priced.IsSuccess()),
+            Stage("Save booking", stored, r => $"Booking {r.BookingId} confirmed",
+                previousFailed: !trace.Receipt.IsSuccess()));
+
+        if (stored is Success<BookingReceipt> { Data: var saved })
+        {
+            State.OwnBookingIds.Add(saved.BookingId);
+            State.BookedReport = Report;
+            State.SelectedReceipt = saved;
+            AppState.AppendFeedMessage($"New booking {saved.BookingId}: {UiText.Station(saved.Origin)} → {UiText.Station(saved.Destination)}, {UiText.Money(saved.AmountPaid)}.");
+        }
+
+        ReloadHistory();
+    }
+
+    private static StageView Stage<T>(string name, Result<T> result, Func<T, string> describe, bool previousFailed) =>
+        previousFailed
+            ? new StageView(name, "Skipped", "Not run because an earlier step failed.")
+            : result.Match(
+                onSuccess: value => new StageView(name, "Done", describe(value)),
+                onFailure: reason => new StageView(name, "Failed", reason));
+
+    private void ReloadHistory()
+    {
+        var loaded = JournalFactory(State.JournalFormat).LoadAll();
+        State.HistoryError = loaded.Match(_ => (string?)null, reason => reason);
+
+        var contents = loaded.Match(c => c, _ => JournalContents.Empty);
+        State.History = contents.Receipts.OrderByDescending(r => r.IssuedAtUtc).ToImmutableList();
+        State.SkippedLines = contents.SkippedLines;
+
+        if (State.SelectedReceipt is not null && !State.History.Contains(State.SelectedReceipt))
+            State.SelectedReceipt = null;
+        State.SelectedReceipt ??= State.History.FirstOrDefault(CanSeeDetails);
+    }
+
+    private void SelectReceipt(BookingReceipt receipt)
+    {
+        if (CanSeeDetails(receipt))
+            State.SelectedReceipt = receipt;
+    }
+
+    // Keyboard users select a history row with Enter or Space, like a button.
+    private void SelectReceiptByKey(KeyboardEventArgs e, BookingReceipt receipt)
+    {
+        if (e.Key is "Enter" or " ")
+            SelectReceipt(receipt);
+    }
+
+    private void CopyToOtherJournal()
+    {
+        var target = JournalFactory(OtherFormat);
+        State.StorageMessage = target.Append(State.History).Match(
+            onSuccess: added => $"Exported {UiText.Count(added, "booking")} to {Path.GetFileName(target.FilePath)}; {State.History.Count - added} were already there.",
+            onFailure: reason => reason);
+    }
+}

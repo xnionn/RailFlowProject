@@ -3,12 +3,11 @@ using System.Collections;
 namespace RailFlow.Core.Functional;
 
 /// <summary>
-/// Currying, Partial Application, and Indefinite Loop / Trampoline Primitives
-/// (Lectures L7_1 & L9_1).
+/// Currying, partial application and indefinite-loop helpers
 /// </summary>
 public static class CurryingAndLoops
 {
-    // --- Currying (Lecture L7_1) ---
+    // --- Currying ---
     public static Func<T1, Func<T2, TOut>> Curry<T1, T2, TOut>(this Func<T1, T2, TOut> f) =>
         x => y => f(x, y);
 
@@ -18,7 +17,7 @@ public static class CurryingAndLoops
     public static Func<T1, Func<T2, Func<T3, Func<T4, TOut>>>> Curry<T1, T2, T3, T4, TOut>(this Func<T1, T2, T3, T4, TOut> f) =>
         w => x => y => z => f(w, x, y, z);
 
-    // --- Partial Application (Lecture L7_1) ---
+    // --- Partial Application ---
     public static Func<T2, TOut> Partial<T1, T2, TOut>(this Func<T1, T2, TOut> f, T1 arg1) =>
         y => f(arg1, y);
 
@@ -32,10 +31,10 @@ public static class CurryingAndLoops
         this Func<T1, T2, T3, T4, TOut> f, T1 arg1, T2 arg2, T3 arg3) =>
         z => f(arg1, arg2, arg3, z);
 
-    // --- Trampoline / IterateUntil (Lectures L7_1 & L9_1) ---
+    // --- IterateUntil ---
     /// <summary>
-    /// Executes an indefinite functional state transition loop without consuming stack frames (Trampoline pattern).
-    /// Avoids StackOverflowException while maintaining pure immutable state transitions.
+    /// Applies updateState until endCondition holds. The caller only supplies pure functions over immutable state;
+    /// the loop itself is an ordinary while loop, so it uses no extra stack per step (see Trampoline for recursion).
     /// </summary>
     public static T IterateUntil<T>(this T initialState, Func<T, T> updateState, Func<T, bool> endCondition)
     {
@@ -63,7 +62,7 @@ public static class CurryingAndLoops
 }
 
 /// <summary>
-/// Custom IEnumerator<T> / IEnumerable<T> implementation (Lectures L7_1 & L9_1)
+/// Custom IEnumerator<T> / IEnumerable<T> implementation
 /// demonstrating allocation-conscious sequence traversal for transit route simulation.
 /// </summary>
 public sealed class TransitStepEnumerable<TState>(

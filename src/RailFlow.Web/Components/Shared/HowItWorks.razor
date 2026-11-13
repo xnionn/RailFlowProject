@@ -1,0 +1,22 @@
+@* A collapsible note that explains which functional technique a section uses. It renders only when the
+   visitor has switched on "Course notes" in the header (the cascaded ViewOptions), so the normal view of the
+   app stays free of course material. It receives the note as child content and an optional summary title. *@
+
+@if (Options.ShowCourseNotes)
+{
+    <details class="how">
+        <summary>@Title</summary>
+        <p>@ChildContent</p>
+    </details>
+}
+
+@code {
+    [CascadingParameter]
+    public ViewOptions Options { get; set; } = ViewOptions.Default;
+
+    [Parameter]
+    public string Title { get; set; } = "How it works";
+
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+}

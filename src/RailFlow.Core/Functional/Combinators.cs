@@ -1,7 +1,7 @@
 namespace RailFlow.Core.Functional;
 
 /// <summary>
-/// Higher-Order Combinators & Monad Extensions (Lectures L4_1 & L6_1).
+/// Higher-Order Combinators & Monad Extensions.
 /// Implements Map, Bind, BindAsync, OnSomething, OnNothing, OnError,
 /// Fork, Alt, Compose, Transduce, Tap, and Flatten.
 /// </summary>
@@ -52,7 +52,7 @@ public static class Combinators
         }
     }
 
-    // --- Flatten nested Maybe<Maybe<T>> (Lecture L6_1) ---
+    // --- Flatten nested Maybe<Maybe<T>> ---
     public static Maybe<T> Flatten<T>(this Maybe<Maybe<T>> @this) =>
         @this switch
         {
@@ -64,7 +64,7 @@ public static class Combinators
             _ => new UnhandledNothing<T>()
         };
 
-    // --- Side-Effect Handlers with Unhandled -> Handled state transition (Lecture L6_1) ---
+    // --- Side-Effect Handlers with Unhandled -> Handled state transition ---
     public static Maybe<T> OnSomething<T>(this Maybe<T> @this, Action<T> onSomething)
     {
         if (@this is Something<T> { InnerValue: { } val })
@@ -94,7 +94,7 @@ public static class Combinators
         return @this;
     }
 
-    // --- Async Monad Composition (Lecture L6_1: Task<Maybe<T>>) ---
+    // --- Async Monad Composition ---
     public static async Task<Maybe<TOut>> BindAsync<TIn, TOut>(
         this Task<Maybe<TIn>> @this,
         Func<TIn, Task<Maybe<TOut>>> bind)
@@ -126,7 +126,7 @@ public static class Combinators
         return awaited.Map(map);
     }
 
-    // --- Lecture L4_1 Higher-Order Combinators ---
+    // --- Higher-Order Combinators ---
 
     /// <summary>
     /// Tap combinator: executes a side-effect action (e.g. logging/telemetry) and returns the original value.
@@ -138,7 +138,7 @@ public static class Combinators
     }
 
     /// <summary>
-    /// Fork combinator (L4_1): fans out an input across multiple prong functions and combines the results.
+    /// Fork combinator: fans out an input across multiple prong functions and combines the results.
     /// </summary>
     public static TOut Fork<TIn, TMiddle, TOut>(
         this TIn @this,
@@ -150,7 +150,7 @@ public static class Combinators
     }
 
     /// <summary>
-    /// Two-prong Fork combinator (L4_1): computes two projections (e.g. Sum and Count) in parallel conceptually and joins them.
+    /// Two-prong Fork combinator: computes two projections (e.g. Sum and Count) in parallel conceptually and joins them.
     /// </summary>
     public static TOut Fork<TIn, T1, T2, TOut>(
         this TIn @this,
@@ -160,7 +160,7 @@ public static class Combinators
         joinFunc(prong1(@this), prong2(@this));
 
     /// <summary>
-    /// Alt combinator (L4_1): tries each candidate function until one returns a non-default / valid result.
+    /// Alt combinator: tries each candidate function until one returns a non-default / valid result.
     /// </summary>
     public static TOut Alt<TIn, TOut>(this TIn @this, params Func<TIn, TOut>[] args) =>
         args.Select(x => x(@this))
@@ -182,7 +182,7 @@ public static class Combinators
     }
 
     /// <summary>
-    /// Compose combinator (L4_1): chains two functions f1: TIn -> TMid and f2: TMid -> TOut into TIn -> TOut.
+    /// Compose combinator: chains two functions f1: TIn -> TMid and f2: TMid -> TOut into TIn -> TOut.
     /// </summary>
     public static Func<TIn, TOut> Compose<TIn, TMid, TOut>(
         this Func<TIn, TMid> f1,
@@ -190,7 +190,7 @@ public static class Combinators
         x => f2(f1(x));
 
     /// <summary>
-    /// Transduce combinator (L4_1): fuses an enumerable pipeline transformation and aggregation into a single reusable function.
+    /// Transduce combinator: fuses an enumerable pipeline transformation and aggregation into a single reusable function.
     /// </summary>
     public static Func<IEnumerable<TIn>, TOut> Transduce<TIn, TFilterOut, TOut>(
         this Func<IEnumerable<TIn>, IEnumerable<TFilterOut>> transformer,

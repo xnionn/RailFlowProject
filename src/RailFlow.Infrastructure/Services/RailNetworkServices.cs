@@ -1,46 +1,48 @@
 using System.Collections.Immutable;
 using RailFlow.Core.Domain;
 using RailFlow.Core.Functional;
+using RailFlow.Infrastructure.Storage;
 
 namespace RailFlow.Infrastructure.Services;
 
 /// <summary>
-/// Live interactive Chaos & Traffic state so Dispatcher/Admin users can inject
-/// roadworks or exceptions into any stage of the Railway-Oriented pipeline.
+/// Shared dispatcher settings for one server: stations with engineering works and the simulated service failures.
+/// One instance is used by every user, so the station set is an immutable value that is swapped atomically.
 /// </summary>
 public sealed class ChaosAndTrafficController
 {
-    private readonly HashSet<string> _roadworksStations = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "FRANKFURT",
-        "LYON"
-    };
+    private ImmutableHashSet<string> _roadworksStations =
+        ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, "FRANKFURT", "LYON");
 
     public bool SimulateMappingServiceCrash { get; set; }
     public bool SimulateRoutePlannerCrash { get; set; }
     public bool SimulateTrafficMonitorCrash { get; set; }
     public bool SimulatePricingCrash { get; set; }
-    public double RoadworksMultiplier { get; set; } = 1.10; // Exact 1.1x multiplier from Lecture L6_1 slide 40
+    public bool SimulatePaymentOutage { get; set; }
+    public double RoadworksMultiplier { get; set; } = 1.10; // fares +10% on routes with engineering works
 
     public event Action<string>? OnTrafficAlertBroadcast;
 
-    public IReadOnlyCollection<string> ActiveRoadworksStations => _roadworksStations.ToList();
+    public IReadOnlyCollection<string> ActiveRoadworksStations => Volatile.Read(ref _roadworksStations);
 
-    public bool HasRoadworksAt(string station) => _roadworksStations.Contains(station);
+    public bool HasRoadworksAt(string station) => Volatile.Read(ref _roadworksStations).Contains(station);
 
     public void ToggleRoadworks(string station, string actorRole)
     {
         var normalized = station.Trim().ToUpperInvariant();
-        if (_roadworksStations.Contains(normalized))
+        var started = false;
+
+        // Retries if another user changed the set at the same moment, so no toggle is lost.
+        ImmutableInterlocked.Update(ref _roadworksStations, current =>
         {
-            _roadworksStations.Remove(normalized);
-            OnTrafficAlertBroadcast?.Invoke($"[{actorRole}] Cleared track maintenance at {normalized}. Multiplier restored to 1.00x.");
-        }
-        else
-        {
-            _roadworksStations.Add(normalized);
-            OnTrafficAlertBroadcast?.Invoke($"[{actorRole}] Activated Roadworks Alert at {normalized}! Pricing multiplier set to {RoadworksMultiplier:F2}x.");
-        }
+            started = !current.Contains(normalized);
+            return started ? current.Add(normalized) : current.Remove(normalized);
+        });
+
+        var name = StationNames.Display(normalized);
+        OnTrafficAlertBroadcast?.Invoke(started
+            ? $"{actorRole}: engineering works started at {name}; connections to {name} cost +{(RoadworksMultiplier - 1) * 100:0}%."
+            : $"{actorRole}: engineering works at {name} finished.");
     }
 
     public void BroadcastCustomAdvisory(string message)
@@ -50,45 +52,24 @@ public sealed class ChaosAndTrafficController
 }
 
 /// <summary>
-/// Concrete IMappingSystem (Lecture L6_1) initialized using the Partially Applied CSV Parser (Lecture L7_1).
+/// Concrete IMappingSystem over the station list loaded from CSV (see NetworkDataLoader).
 /// </summary>
 public sealed class RailMappingSystem : IMappingSystem
 {
     private readonly ImmutableDictionary<string, GeoCoord> _stations;
     private readonly ChaosAndTrafficController _chaos;
 
-    private const string EmbeddedStationsCsv = """
-        LONDON,51.5308,-0.1238
-        PARIS,48.8809,2.3553
-        BRUSSELS,50.8357,4.3365
-        AMSTERDAM,52.3791,4.9003
-        COLOGNE,50.9432,6.9586
-        FRANKFURT,50.1071,8.6638
-        ZURICH,47.3779,8.5403
-        MILAN,45.4859,9.2043
-        LYON,45.7606,4.8594
-        MUNICH,48.1402,11.5599
-        BERLIN,52.5251,13.3694
-        VIENNA,48.1851,16.3766
-        """;
-
     public RailMappingSystem(ChaosAndTrafficController chaos)
+        : this(chaos, EmbeddedNetwork.Dataset)
+    {
+    }
+
+    public RailMappingSystem(ChaosAndTrafficController chaos, NetworkDataset dataset)
     {
         _chaos = chaos;
-        var rows = BenchmarkAndLoopLab.StandardCsvParser(EmbeddedStationsCsv);
-        var builder = ImmutableDictionary.CreateBuilder<string, GeoCoord>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var row in rows)
-        {
-            if (row.Count >= 3 &&
-                double.TryParse(row[1], System.Globalization.CultureInfo.InvariantCulture, out var lat) &&
-                double.TryParse(row[2], System.Globalization.CultureInfo.InvariantCulture, out var lon))
-            {
-                builder[row[0]] = new GeoCoord(lat, lon, row[0].ToUpperInvariant());
-            }
-        }
-
-        _stations = builder.ToImmutable();
+        _stations = dataset.Stations
+            .GroupBy(s => s.StationCode, StringComparer.OrdinalIgnoreCase)
+            .ToImmutableDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
     }
 
     public Maybe<GeoCoord> FindLocation(string placeName)
@@ -96,7 +77,7 @@ public sealed class RailMappingSystem : IMappingSystem
         if (_chaos.SimulateMappingServiceCrash)
         {
             return new UnhandledError<GeoCoord>(
-                new InvalidOperationException("IMappingSystem satellite telemetry timeout (Simulated Fault)."));
+                new InvalidOperationException("Station lookup service did not respond (simulated failure)."));
         }
 
         if (string.IsNullOrWhiteSpace(placeName))
@@ -112,46 +93,22 @@ public sealed class RailMappingSystem : IMappingSystem
 }
 
 /// <summary>
-/// Concrete IRoutePlanner (Lecture L6_1) backed by the Memoized BFS TransitGraphEngine (Lecture L8_1).
+/// Concrete IRoutePlanner backed by the Memoized BFS TransitGraphEngine.
 /// </summary>
 public sealed class RailRoutePlanner : IRoutePlanner
 {
     private readonly TransitGraphEngine _graphEngine;
     private readonly ChaosAndTrafficController _chaos;
 
-    private const string EmbeddedConnectionsCsv = """
-        LONDON,PARIS,460,135,Eurostar High-Speed
-        LONDON,BRUSSELS,370,120,Eurostar Channel Line
-        PARIS,BRUSSELS,310,82,Thalys Red Corridor
-        BRUSSELS,AMSTERDAM,210,110,Benelux Intercity
-        BRUSSELS,COLOGNE,220,105,ICE International
-        COLOGNE,FRANKFURT,190,62,ICE Rhine-Main Sprinter
-        FRANKFURT,BERLIN,545,235,ICE Sprinter North-East
-        FRANKFURT,MUNICH,390,195,ICE Bavarian Express
-        FRANKFURT,ZURICH,400,230,ECE Helvetia
-        PARIS,LYON,465,118,TGV Sud-Est Duplex
-        LYON,ZURICH,415,215,TGV Lyria Alpine
-        LYON,MILAN,445,265,Frecciarossa Transalpine
-        ZURICH,MILAN,285,195,Gotthard Base Tunnel EC
-        MUNICH,VIENNA,405,240,Railjet Danube Express
-        BERLIN,VIENNA,680,460,ICE Vindobona Corridor
-        """;
-
     public RailRoutePlanner(ChaosAndTrafficController chaos)
+        : this(chaos, EmbeddedNetwork.Dataset)
+    {
+    }
+
+    public RailRoutePlanner(ChaosAndTrafficController chaos, NetworkDataset dataset)
     {
         _chaos = chaos;
-        var rows = BenchmarkAndLoopLab.StandardCsvParser(EmbeddedConnectionsCsv);
-        var edges = new List<GraphConnection>();
-        foreach (var r in rows)
-        {
-            if (r.Count >= 5 &&
-                double.TryParse(r[2], System.Globalization.CultureInfo.InvariantCulture, out var km) &&
-                int.TryParse(r[3], System.Globalization.CultureInfo.InvariantCulture, out var min))
-            {
-                edges.Add(new GraphConnection(r[0], r[1], km, min, r[4]));
-            }
-        }
-        _graphEngine = new TransitGraphEngine(edges);
+        _graphEngine = new TransitGraphEngine(dataset.Connections);
     }
 
     public TransitGraphEngine GraphEngine => _graphEngine;
@@ -161,7 +118,7 @@ public sealed class RailRoutePlanner : IRoutePlanner
         if (_chaos.SimulateRoutePlannerCrash)
         {
             return new UnhandledError<PlannedRoute>(
-                new TimeoutException("IRoutePlanner graph solver encountered a deadlock (Simulated Fault)."));
+                new TimeoutException("Route planner timed out (simulated failure)."));
         }
 
         return _graphEngine
@@ -176,7 +133,7 @@ public sealed class RailRoutePlanner : IRoutePlanner
 }
 
 /// <summary>
-/// Concrete ITrafficMonitor (Lecture L6_1) inspecting intermediate stations for active roadworks/track maintenance.
+/// Concrete ITrafficMonitor inspecting intermediate stations for active roadworks/track maintenance.
 /// </summary>
 public sealed class RailTrafficMonitor(ChaosAndTrafficController chaos) : ITrafficMonitor
 {
@@ -185,39 +142,45 @@ public sealed class RailTrafficMonitor(ChaosAndTrafficController chaos) : ITraff
         if (chaos.SimulateTrafficMonitorCrash)
         {
             return new UnhandledError<RouteWithTraffic>(
-                new HttpRequestException("ITrafficMonitor sensor feed disconnected (Simulated 503 Fault)."));
+                new HttpRequestException("Engineering works feed is unavailable (simulated failure)."));
         }
 
-        var traversedStations = route.Segments
-            .SelectMany(s => new[] { s.FromStation, s.ToStation })
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+        // A section is affected when either of its stations has engineering works.
+        var affectedSections = route.Segments
+            .Where(s => chaos.HasRoadworksAt(s.FromStation) || chaos.HasRoadworksAt(s.ToStation))
             .ToList();
 
-        var affected = traversedStations
-            .Where(chaos.HasRoadworksAt)
-            .ToList();
-
-        if (affected.Count > 0)
+        if (affectedSections.Count > 0)
         {
             var multiplier = chaos.RoadworksMultiplier;
+            var stations = affectedSections
+                .SelectMany(s => new[] { s.FromStation, s.ToStation })
+                .Where(chaos.HasRoadworksAt)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(StationNames.Display);
+            var affectedKm = affectedSections.Sum(s => s.DistanceKm);
+            var sections = string.Join(", ", affectedSections.Select(s =>
+                $"{StationNames.Display(s.FromStation)} → {StationNames.Display(s.ToStation)}"));
+
             return new Something<RouteWithTraffic>(new RouteWithTraffic(
                 Route: route,
                 HasRoadworksOrTrackMaintenance: true,
                 DelaySeverityMultiplier: multiplier,
-                TrafficAdvisory: $"Engineering works active at {string.Join(", ", affected)} (+{(multiplier - 1.0) * 100:F0}% dynamic tariff factor)."));
+                TrafficAdvisory: $"Engineering works at {string.Join(", ", stations)}: +{(multiplier - 1.0) * 100:F0}% on {sections} ({affectedKm:N0} km).",
+                AffectedDistanceKm: affectedKm));
         }
 
         return new Something<RouteWithTraffic>(new RouteWithTraffic(
             Route: route,
             HasRoadworksOrTrackMaintenance: false,
             DelaySeverityMultiplier: 1.0,
-            TrafficAdvisory: "All traversed rail corridors operating at nominal green signal capacity."));
+            TrafficAdvisory: "No engineering works on this route."));
     }
 }
 
 /// <summary>
-/// Concrete IPricingCalculator (Lectures L5_1 & L6_1) combining the 1.1x Roadworks Multiplier
-/// with Pattern Matching over the CustomerOffering Discriminated Union (StandardDayTrip, RailHoliday, RailHolidayWithMeals).
+/// Concrete IPricingCalculator: a per-km base fare, the engineering-works surcharge on the affected kilometres only,
+/// and the package price chosen by pattern matching over the CustomerOffering union.
 /// </summary>
 public sealed class RailPricingCalculator(ChaosAndTrafficController chaos) : IPricingCalculator
 {
@@ -231,7 +194,7 @@ public sealed class RailPricingCalculator(ChaosAndTrafficController chaos) : IPr
         if (chaos.SimulatePricingCrash)
         {
             return new UnhandledError<PricedItinerary>(
-                new DivideByZeroException("IPricingCalculator tariff matrix overflow (Simulated Fault)."));
+                new DivideByZeroException("Fare calculation service failed (simulated failure)."));
         }
 
         if (passengers <= 0)
@@ -239,13 +202,14 @@ public sealed class RailPricingCalculator(ChaosAndTrafficController chaos) : IPr
 
         var baseDistanceFare = Math.Round((decimal)route.Route.TotalDistanceKm * BaseRatePerKm * passengers, 2);
 
-        // Lecture L6_1 Slide 40: Apply 1.1x multiplier if roadworks are present on the route
+        // The surcharge applies to the kilometres that pass through engineering works, not to the whole journey.
         var multiplier = (decimal)route.DelaySeverityMultiplier;
+        var affectedFare = (decimal)route.AffectedDistanceKm * BaseRatePerKm * passengers;
         var roadworksSurcharge = route.HasRoadworksOrTrackMaintenance
-            ? Math.Round(baseDistanceFare * (multiplier - 1.0m), 2)
+            ? Math.Round(affectedFare * (multiplier - 1.0m), 2)
             : 0.00m;
 
-        // Lecture L5_1 Exhaustive Switch Expression Pattern Matching on CustomerOffering Discriminated Union
+        // Exhaustive Switch Expression Pattern Matching on CustomerOffering Discriminated Union
         var offeringAddon = offering switch
         {
             StandardDayTrip { IncludesReturnTicket: true } =>
@@ -262,12 +226,12 @@ public sealed class RailPricingCalculator(ChaosAndTrafficController chaos) : IPr
         var finalPrice = baseDistanceFare + roadworksSurcharge + offeringAddon;
 
         var audit = ImmutableList.Create(
-            $"Base Rail Distance ({route.Route.TotalDistanceKm:F1} km x €{BaseRatePerKm}/km x {passengers} pax): €{baseDistanceFare:F2}",
+            $"Base fare: {route.Route.TotalDistanceKm:F1} km x €{BaseRatePerKm}/km x {passengers} passenger(s) = €{baseDistanceFare:F2}",
             route.HasRoadworksOrTrackMaintenance
-                ? $"Roadworks Surcharge (x{route.DelaySeverityMultiplier:F2} factor from L6_1): +€{roadworksSurcharge:F2}"
-                : "Roadworks Surcharge: €0.00 (Clear corridor)",
-            $"CustomerOffering Union Match [{offering.GetType().Name} — {offering.Title}]: +€{offeringAddon:F2}",
-            $"Total Computed Fare: €{finalPrice:F2}"
+                ? $"Engineering works: {(multiplier - 1.0m) * 100:0}% of the fare for {route.AffectedDistanceKm:N0} affected km = +€{roadworksSurcharge:F2}"
+                : "Engineering works surcharge: €0.00",
+            $"Package ({offering.Title}): +€{offeringAddon:F2}",
+            $"Total: €{finalPrice:F2}"
         );
 
         return new Something<PricedItinerary>(new PricedItinerary(

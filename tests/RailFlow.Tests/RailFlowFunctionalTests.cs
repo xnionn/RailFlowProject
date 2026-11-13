@@ -190,7 +190,7 @@ public class RailFlowFunctionalTests
         var offering = new RailHolidayWithMeals(
             "Alpine Gourmet",
             "4 Nights + Dining",
-            new intHotelNights(4),
+            new HotelNights(4),
             "Alpine",
             "Full Board",
             true);

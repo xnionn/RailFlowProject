@@ -49,12 +49,12 @@ public sealed class MemoizedFunc<TIn, TOut> where TIn : notnull
 }
 
 /// <summary>
-/// Memoization Extensions (Lecture L8_1: Simple Memoize, MemoizeBy, Thread-Safe ConcurrentDictionary + Lazy<T>, and MemoizeAsync).
+/// Memoization Extensions.
 /// </summary>
 public static class Memoization
 {
     /// <summary>
-    /// Simple closure-based Memoize (Lecture L8_1).
+    /// Simple closure-based Memoize.
     /// </summary>
     public static Func<TIn, TOut> Memoize<TIn, TOut>(this Func<TIn, TOut> @this)
         where TIn : notnull
@@ -69,7 +69,7 @@ public static class Memoization
     }
 
     /// <summary>
-    /// MemoizeBy with custom key selector for complex objects (Lecture L8_1).
+    /// MemoizeBy with custom key selector for complex objects.
     /// </summary>
     public static Func<TIn, TOut> MemoizeBy<TIn, TKey, TOut>(
         this Func<TIn, TOut> @this,
@@ -87,14 +87,14 @@ public static class Memoization
     }
 
     /// <summary>
-    /// Thread-safe memoization with telemetry stats for UI inspection (Lecture L8_1).
+    /// Thread-safe memoization with telemetry stats for UI inspection.
     /// </summary>
     public static MemoizedFunc<TIn, TOut> MemoizeThreadSafeWithStats<TIn, TOut>(this Func<TIn, TOut> @this)
         where TIn : notnull =>
         new(@this);
 
     /// <summary>
-    /// Async memoization using ConcurrentDictionary and Lazy<Task<TOut>> (Lecture L8_1).
+    /// Async memoization using ConcurrentDictionary and Lazy<Task<TOut>>.
     /// Automatically evicts faulted tasks so transient failures can recover.
     /// </summary>
     public static Func<TIn, Task<TOut>> MemoizeAsync<TIn, TOut>(this Func<TIn, Task<TOut>> @this)

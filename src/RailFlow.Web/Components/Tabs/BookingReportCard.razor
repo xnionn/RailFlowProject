@@ -1,0 +1,74 @@
+@* Revenue report of the Bookings tab, shown to dispatchers only: totals, revenue per package and the most
+   expensive bookings, all computed with the LINQ extension methods in BookingQueries. It receives the
+   booking history and the origin currently entered on the planner (for the "trips starting in" line). *@
+
+<section class="card">
+    <div class="card-head">
+        <h2>Report</h2>
+    </div>
+
+    <div class="stats three">
+        <StatCard Label="Bookings" Value="@History.Count.ToString()" />
+        <StatCard Label="Revenue" Value="@UiText.Money(History.TotalRevenue())" />
+        <StatCard Label="Average ticket"
+                  Value="@(History.AverageTicketPrice() switch { Something<decimal> { InnerValue: var avg } => UiText.Money(avg), _ => "—" })" />
+    </div>
+
+    <h3>Revenue by package</h3>
+    @if (History.Count == 0)
+    {
+        <p class="muted small">Nothing to show yet.</p>
+    }
+    else
+    {
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Package</th>
+                        <th class="num">Bookings</th>
+                        <th class="num">Passengers</th>
+                        <th class="num">Revenue</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var line in History.RevenueByOffering())
+                    {
+                        <tr>
+                            <td>@line.OfferingTitle</td>
+                            <td class="num">@line.Bookings</td>
+                            <td class="num">@line.Passengers</td>
+                            <td class="num">@UiText.Money(line.Revenue)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        <h3>Most expensive bookings</h3>
+        <ol class="list-plain">
+            @foreach (var r in History.MostExpensive(3))
+            {
+                <li>@UiText.Station(r.Origin) → @UiText.Station(r.Destination), @UiText.Money(r.AmountPaid) <span class="muted">(@r.BookingId)</span></li>
+            }
+        </ol>
+        <p class="muted small">Revenue from trips starting in @UiText.Station(Origin): @UiText.Money(History.ForOrigin(Origin).TotalRevenue())</p>
+    }
+
+    <HowItWorks>
+            Extension methods on <code>IEnumerable&lt;BookingReceipt&gt;</code>: <code>TotalRevenue</code>,
+            <code>RevenueByOffering</code> (<code>GroupBy</code>), <code>MostExpensive</code> (uses the receipt's
+            <code>IComparable</code> ordering) and <code>AverageTicketPrice</code>, which returns <code>Maybe</code>
+            so an empty history shows a dash instead of throwing.
+    </HowItWorks>
+</section>
+
+@code {
+    [Parameter, EditorRequired]
+    public ImmutableList<BookingReceipt> History { get; set; } = ImmutableList<BookingReceipt>.Empty;
+
+    /// <summary>The origin typed on the planner; the report adds up the revenue for trips from there.</summary>
+    [Parameter]
+    public string Origin { get; set; } = "";
+
+}

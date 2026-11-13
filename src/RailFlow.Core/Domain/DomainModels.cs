@@ -3,7 +3,7 @@ using RailFlow.Core.Functional;
 
 namespace RailFlow.Core.Domain;
 
-// --- Lecture L33 & L6_1 Worked Route-Pricing Domain Records ---
+// --- Worked Route-Pricing Domain Records ---
 
 public sealed record GeoCoord(double Latitude, double Longitude, string StationCode);
 
@@ -21,11 +21,16 @@ public sealed record PlannedRoute(
     double TotalDistanceKm,
     int EstimatedMinutes);
 
+/// <summary>
+/// A planned route after the engineering-works check. AffectedDistanceKm is the length of the sections that start or end
+/// at a station with works; only those kilometres carry the surcharge.
+/// </summary>
 public sealed record RouteWithTraffic(
     PlannedRoute Route,
     bool HasRoadworksOrTrackMaintenance,
     double DelaySeverityMultiplier,
-    string TrafficAdvisory);
+    string TrafficAdvisory,
+    double AffectedDistanceKm = 0.0);
 
 public sealed record PricedItinerary(
     RouteWithTraffic TrafficRoute,
@@ -37,7 +42,7 @@ public sealed record PricedItinerary(
     string Currency,
     ImmutableList<string> PipelineAuditLog);
 
-// --- Lecture L5_1 Discriminated Union: CustomerOffering ---
+// --- Discriminated Union: CustomerOffering ---
 public abstract record CustomerOffering(string Title, string Description);
 
 public sealed record StandardDayTrip(
@@ -48,27 +53,27 @@ public sealed record StandardDayTrip(
 public sealed record RailHoliday(
     string Title,
     string Description,
-    intHotelNights Nights,
+    HotelNights Nights,
     string HotelTier) : CustomerOffering(Title, Description);
 
 public sealed record RailHolidayWithMeals(
     string Title,
     string Description,
-    intHotelNights Nights,
+    HotelNights Nights,
     string HotelTier,
     string DiningPlan,
     bool LoungeAccess) : CustomerOffering(Title, Description);
 
-public readonly record struct intHotelNights(int Value);
+public readonly record struct HotelNights(int Value);
 
-// --- Lecture L5_1 Discriminated Union: UserInput Validation ---
+// --- Discriminated Union: UserInput Validation ---
 public abstract record ValidatedUserInput;
 public sealed record ValidRouteQuery(string Origin, string Destination, int Passengers, CustomerOffering Offering) : ValidatedUserInput;
 public sealed record EmptyRouteQuery(string FieldName) : ValidatedUserInput;
 public sealed record SameStationError(string Station) : ValidatedUserInput;
 public sealed record InvalidPassengerCount(int AttemptedCount) : ValidatedUserInput;
 
-// --- Lecture L6_1 Worked Example Interfaces ---
+// --- Service interfaces used by the route-pricing pipeline ---
 public interface IMappingSystem
 {
     Maybe<GeoCoord> FindLocation(string placeName);
@@ -90,7 +95,7 @@ public interface IPricingCalculator
     Maybe<PricedItinerary> CalculatePrice(RouteWithTraffic route, CustomerOffering offering, int passengers);
 }
 
-// --- Lecture L7_1 Snakes & Ladders / Transit Delay Indefinite Loop Simulation State ---
+// --- State of the step-by-step train simulation ---
 public sealed record TransitSimulationState(
     int StepIndex,
     string CurrentStation,

@@ -1,0 +1,79 @@
+@* Benchmark card of the Lab tab: the same calculation over a 25,000-character signal written six ways
+   (foreach, LINQ, the Fork combinator, IterateUntil, a custom IEnumerable), with average times, the fastest
+   row highlighted and a bar for the relative time. It receives the last results as a two-way parameter
+   (Entries / EntriesChanged) so the caller can keep them between visits. The benchmark takes a moment, so it
+   only runs when the card first appears with no results, or when the user clicks "Run again". *@
+
+<section class="card">
+    <div class="card-head">
+        <div>
+            <h2>Loop styles compared</h2>
+            <p class="card-sub">The final elevation of a 25,000-character signal, computed six ways. Every row must give the same result.</p>
+        </div>
+        <button class="btn btn-sm" @onclick="RunLiveBenchmarks">Run again</button>
+    </div>
+
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Approach</th>
+                    <th>Kind</th>
+                    <th class="num">Result</th>
+                    <th class="num">Avg time</th>
+                    <th class="num">vs fastest</th>
+                    <th>Note</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var b in Entries)
+                {
+                    <tr class="@(b.RelativeRatio <= 1.0 ? "best" : "")">
+                        <td class="nowrap"><code>@b.ApproachName</code></td>
+                        <td class="muted nowrap">@b.Category</td>
+                        <td class="num">@b.ComputedValue.Value.ToString("N0")</td>
+                        <td class="num">
+                            @b.ElapsedMicroseconds.ToString("N1") µs
+                            <span class="bar" style="width:@BarWidth(b)%"></span>
+                        </td>
+                        <td class="num">@b.RelativeRatio.ToString("0.00")×</td>
+                        <td class="muted">@b.ArchitecturalNote</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <HowItWorks>
+        Compares a plain <code>foreach</code>, LINQ, the <code>Fork</code> combinator, the <code>IterateUntil</code>
+        loop and a custom <code>IEnumerable</code>. Times are averages of 15 runs after a warm-up, measured with a
+        <code>Stopwatch</code>, so they vary between machines and runs.
+    </HowItWorks>
+</section>
+
+@code {
+    /// <summary>Results of the last run; empty means "not run yet".</summary>
+    [Parameter]
+    public ImmutableList<BenchmarkEntry> Entries { get; set; } = ImmutableList<BenchmarkEntry>.Empty;
+
+    [Parameter]
+    public EventCallback<ImmutableList<BenchmarkEntry>> EntriesChanged { get; set; }
+
+    protected override Task OnInitializedAsync() =>
+        Entries.IsEmpty ? RunLiveBenchmarks() : Task.CompletedTask;
+
+    // Bar length relative to the slowest approach, as a whole percentage (culture-independent for CSS).
+    private string BarWidth(BenchmarkEntry entry)
+    {
+        var slowest = Entries.Max(e => e.ElapsedMicroseconds);
+        var percent = slowest <= 0 ? 0 : Math.Max(2, (int)Math.Round(entry.ElapsedMicroseconds / slowest * 100));
+        return percent.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private Task RunLiveBenchmarks()
+    {
+        // Shown straight away, and handed to the caller so the next visit does not run it again.
+        Entries = BenchmarkAndLoopLab.RunElevationTelemetryBenchmark(25_000);
+        return EntriesChanged.InvokeAsync(Entries);
+    }
+}

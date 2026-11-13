@@ -2,7 +2,6 @@ namespace RailFlow.Core.Functional;
 
 /// <summary>
 /// Generic Discriminated Union representing optionality and explicit failure states
-/// (Lectures L5_1 & L6_1: Functional Flow with Monads).
 /// Includes UnhandledNothing and UnhandledError to prevent duplicate logging across chains.
 /// </summary>
 public abstract record Maybe<T>
@@ -27,14 +26,14 @@ public record Error<T>(Exception ErrorDetails) : Maybe<T>
 public sealed record UnhandledError<T>(Exception ErrorDetails) : Error<T>(ErrorDetails);
 
 /// <summary>
-/// Result<T> Discriminated Union (Lecture L5_1).
+/// Result<T> Discriminated Union.
 /// </summary>
 public abstract record Result<T>;
 public sealed record Success<T>(T Data) : Result<T>;
 public sealed record Failure<T>(string Reason, Exception? Exception = null) : Result<T>;
 
 /// <summary>
-/// Either<TLeft, TRight> Discriminated Union (Lecture L5_1).
+/// Either<TLeft, TRight> Discriminated Union.
 /// By convention, Left holds validation/fallback info and Right holds the primary value.
 /// </summary>
 public abstract record Either<TLeft, TRight>;
@@ -42,7 +41,7 @@ public sealed record Left<TLeft, TRight>(TLeft Value) : Either<TLeft, TRight>;
 public sealed record Right<TLeft, TRight>(TRight Value) : Either<TLeft, TRight>;
 
 /// <summary>
-/// Reader<TEnv, TVal> Monad for Functional Dependency Injection (Lecture L6_1).
+/// Reader<TEnv, TVal> Monad for Functional Dependency Injection.
 /// </summary>
 public sealed class Reader<TEnv, TVal>(Func<TEnv, TVal> run)
 {
@@ -56,7 +55,7 @@ public sealed class Reader<TEnv, TVal>(Func<TEnv, TVal> run)
 }
 
 /// <summary>
-/// State<TState, TVal> Monad for explicit immutable state transitions (Lecture L6_1).
+/// State<TState, TVal> Monad for explicit immutable state transitions.
 /// </summary>
 public sealed class State<TState, TVal>(Func<TState, (TVal Value, TState NextState)> run)
 {

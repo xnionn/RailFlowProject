@@ -1,64 +1,56 @@
 @typeparam TItem
+@* Renders a Maybe<TItem>: one template per case, with sensible defaults for Nothing and Error. *@
 
-<div class="maybe-view-container" role="region" aria-live="polite">
+<div class="maybe-view" role="region" aria-live="polite">
     @switch (State)
     {
         case Something<TItem> { InnerValue: { } item }:
-            <div class="maybe-state maybe-something">
-                <div class="maybe-badge badge-something">
-                    <span class="dot"></span> Monad State: <code>Something&lt;@typeof(TItem).Name&gt;</code>
-                </div>
-                @if (SomethingTemplate is not null)
-                {
-                    @SomethingTemplate(item)
-                }
-            </div>
+            @if (SomethingTemplate is not null)
+            {
+                @SomethingTemplate(item)
+            }
             break;
 
         case Error<TItem> { ErrorDetails: var ex }:
-            <div class="maybe-state maybe-error" role="alert">
-                <div class="maybe-badge badge-error">
-                    <span class="dot"></span> Monad State: <code>@State.GetType().Name.Split('`')[0]&lt;@typeof(TItem).Name&gt;</code>
+            @if (ErrorTemplate is not null)
+            {
+                @ErrorTemplate(ex)
+            }
+            else
+            {
+                <div class="alert err" role="alert">
+                    <strong>The request could not be completed</strong>
+                    <p>@ex.Message</p>
+                    @if (ActiveRole == UserRole.DispatcherAdmin && OnRetry.HasDelegate)
+                    {
+                        <div class="actions">
+                            <button class="btn btn-sm" @onclick="() => OnRetry.InvokeAsync()">Clear simulated failures and retry</button>
+                        </div>
+                    }
+                    else
+                    {
+                        <p class="muted small">Please try again later.</p>
+                    }
                 </div>
-                @if (ErrorTemplate is not null)
-                {
-                    @ErrorTemplate(ex)
-                }
-                else
-                {
-                    <div class="default-alert-box error-box">
-                        <h4>Railway Bypass Track: Exception Captured Safely</h4>
-                        <p>@ex.Message</p>
-                        <small>Role Context: <strong>@ActiveRole</strong> — No unhandled crash occurred in the UI thread.</small>
-                        @if (OnRetry.HasDelegate)
-                        {
-                            <div style="margin-top:0.75rem;">
-                                <button class="btn-secondary" @onclick="() => OnRetry.InvokeAsync()">Reset Faults &amp; Retry Pipeline</button>
-                            </div>
-                        }
-                    </div>
-                }
-            </div>
+            }
             break;
 
         case Nothing<TItem>:
-        default:
-            <div class="maybe-state maybe-nothing">
-                <div class="maybe-badge badge-nothing">
-                    <span class="dot"></span> Monad State: <code>Nothing&lt;@typeof(TItem).Name&gt;</code>
+            @if (NothingTemplate is not null)
+            {
+                @NothingTemplate
+            }
+            else
+            {
+                <div class="alert warn">
+                    <strong>No result</strong>
+                    <p>Nothing matched the request.</p>
                 </div>
-                @if (NothingTemplate is not null)
-                {
-                    @NothingTemplate
-                }
-                else
-                {
-                    <div class="default-alert-box nothing-box">
-                        <h4>No Matching Result (Nothing&lt;@typeof(TItem).Name&gt;)</h4>
-                        <p>The functional pipeline short-circuited cleanly without null reference exceptions.</p>
-                    </div>
-                }
-            </div>
+            }
+            break;
+
+        default:
+            <p class="muted">No data yet.</p>
             break;
     }
 </div>
@@ -79,6 +71,7 @@
     [Parameter]
     public EventCallback OnRetry { get; set; }
 
+    /// <summary>Provided by the page through a CascadingValue; only dispatchers can reset simulated failures.</summary>
     [CascadingParameter]
     public UserRole ActiveRole { get; set; }
 }

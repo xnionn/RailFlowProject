@@ -1,0 +1,37 @@
+# Build output (the image builds its own)
+**/bin/
+**/obj/
+artifacts/
+**/publish/
+
+# Tests and test output
+tests/
+**/TestResults/
+**/test-results/
+**/*.trx
+**/coverage*
+
+# Runtime data created when the app runs locally
+**/App_Data/
+
+# VCS, IDE and tool folders
+.git
+.gitignore
+.gitattributes
+.vs/
+.vscode/
+.idea/
+.claude/
+*.user
+*.suo
+*.DotSettings.user
+
+# Team-only material and docs (not needed in the image)
+_team/
+_commit-kit/
+docs/
+README.md
+
+# Docker files themselves
+Dockerfile
+.dockerignore

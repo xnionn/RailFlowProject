@@ -1,0 +1,87 @@
+@* "Network" tab (dispatchers): the stations and connections loaded at startup, rejected input lines and which
+   connections are affected by engineering works. It receives nothing; the data set, the route planner (for
+   the connection list) and the dispatcher controller (for engineering works) are injected. *@
+
+@inject NetworkDataset Network
+@inject RailRoutePlanner RoutePlanner
+@inject ChaosAndTrafficController ChaosController
+
+<div class="stats">
+    <StatCard Label="Stations" Value="@Network.Stations.Count.ToString("N0")" Hint="@Network.Source" />
+    <StatCard Label="Connections" Value="@Network.Connections.Count.ToString("N0")" />
+    <StatCard Label="Rejected input lines" Value="@Network.Rejected.Count.ToString("N0")"
+              Tone="@(Network.Rejected.Count > 0 ? "warn" : "")" />
+    <StatCard Label="Under engineering works" Value="@UiText.Count(AffectedConnections, "connection")" />
+</div>
+
+@if (Network.Rejected.Count > 0)
+{
+    <div class="alert warn">
+        <strong>Some input lines were rejected and skipped</strong>
+        <ul class="list-plain">
+            @foreach (var r in Network.Rejected)
+            {
+                <li><code>@r.Source:@r.LineNumber</code> @r.Reason</li>
+            }
+        </ul>
+    </div>
+}
+
+<section class="card">
+    <div class="card-head">
+        <div>
+            <h2>Connections</h2>
+            <p class="card-sub">Routes use the fewest changes; engineering works add a surcharge on the affected connections.</p>
+        </div>
+    </div>
+
+    <div class="table-wrap scroll">
+        <table>
+            <thead>
+                <tr>
+                    <th>From</th>
+                    <th>To</th>
+                    <th>Line</th>
+                    <th class="num">Distance</th>
+                    <th class="num">Time</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var edge in RoutePlanner.GraphEngine.Edges)
+                {
+                    <tr>
+                        <td>@UiText.Station(edge.FromStation)</td>
+                        <td>@UiText.Station(edge.ToStation)</td>
+                        <td class="nowrap">@edge.LineName</td>
+                        <td class="num">@edge.DistanceKm.ToString("N0") km</td>
+                        <td class="num">@UiText.Duration(edge.Minutes)</td>
+                        <td>
+                            @if (HasWorks(edge))
+                            {
+                                <span class="tag warn">Engineering works</span>
+                            }
+                            else
+                            {
+                                <span class="tag ok">Normal</span>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <HowItWorks>
+        Stations and connections are read from <code>Data/stations.csv</code> and <code>Data/connections.csv</code> at
+        startup and parsed line by line into <code>Result</code> values; bad lines are listed instead of stopping the app.
+        The shortest route is a breadth-first search over these connections.
+    </HowItWorks>
+</section>
+
+@code {
+    private bool HasWorks(GraphConnection edge) =>
+        ChaosController.HasRoadworksAt(edge.FromStation) || ChaosController.HasRoadworksAt(edge.ToStation);
+
+    private int AffectedConnections => RoutePlanner.GraphEngine.Edges.Count(HasWorks);
+}

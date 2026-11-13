@@ -1,0 +1,23 @@
+<div class="stat @Tone">
+    <div class="stat-label">@Label</div>
+    <div class="stat-value">@Value</div>
+    @if (!string.IsNullOrWhiteSpace(Hint))
+    {
+        <div class="stat-hint">@Hint</div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public string Label { get; set; } = string.Empty;
+
+    [Parameter, EditorRequired]
+    public string Value { get; set; } = string.Empty;
+
+    [Parameter]
+    public string? Hint { get; set; }
+
+    /// <summary>Optional colour: "ok", "warn" or "err".</summary>
+    [Parameter]
+    public string Tone { get; set; } = string.Empty;
+}

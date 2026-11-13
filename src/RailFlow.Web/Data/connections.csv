@@ -1,0 +1,20 @@
+# RailFlow rail corridors (undirected). distance in km, base travel time in minutes.
+from,to,distance_km,minutes,line
+LONDON,PARIS,460,135,Eurostar High-Speed
+LONDON,BRUSSELS,370,120,Eurostar Channel Line
+PARIS,BRUSSELS,310,82,Thalys Red Corridor
+BRUSSELS,AMSTERDAM,210,110,Benelux Intercity
+BRUSSELS,COLOGNE,220,105,ICE International
+COLOGNE,FRANKFURT,190,62,ICE Rhine-Main Sprinter
+FRANKFURT,BERLIN,545,235,ICE Sprinter North-East
+FRANKFURT,MUNICH,390,195,ICE Bavarian Express
+FRANKFURT,ZURICH,400,230,EC Helvetia
+PARIS,LYON,465,118,TGV Sud-Est Duplex
+LYON,ZURICH,415,215,TGV Lyria Alpine
+LYON,MILAN,445,265,Frecciarossa Transalpine
+ZURICH,MILAN,285,195,Gotthard Base Tunnel EC
+MUNICH,VIENNA,405,240,Railjet Danube Express
+BERLIN,VIENNA,680,460,ICE Vindobona Corridor
+BERLIN,PRAGUE,350,260,EC Berlin-Prague
+PRAGUE,VIENNA,330,240,Railjet Prague-Vienna
+LYON,BARCELONA,640,300,TGV Lyon-Barcelona

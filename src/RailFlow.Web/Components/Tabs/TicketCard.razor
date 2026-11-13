@@ -1,0 +1,59 @@
+@* E-ticket card of the Bookings tab: previews the selected booking in the chosen format and offers it as
+   a download. It receives the receipt to show (null shows "No booking selected.") and the ticket format as
+   a two-way parameter (Format / FormatChanged), so the choice is remembered by the caller. The download
+   link carries the file itself as a data: URI built here from that receipt, so no API call (and no
+   sign-in) is needed and only a booking the user may already see can be downloaded. *@
+
+<section class="card">
+    <div class="card-head">
+        <div>
+            <h2>E-ticket</h2>
+            <p class="card-sub">Preview and download the selected booking.</p>
+        </div>
+        @if (Receipt is not null)
+        {
+            <div class="inline">
+                <label for="ticketFormat">Format</label>
+                <select id="ticketFormat" @bind:get="Format" @bind:set="format => FormatChanged.InvokeAsync(format)">
+                    <option value="@TicketFormat.PlainText">Text</option>
+                    <option value="@TicketFormat.Csv">CSV</option>
+                    <option value="@TicketFormat.Json">JSON</option>
+                </select>
+                <a class="btn btn-sm" href="@TicketDataUri(Receipt)"
+                   download="@($"{Receipt.BookingId}{TicketExportFactory.Describe(Format).Extension}")">Download</a>
+            </div>
+        }
+    </div>
+
+    @if (Receipt is not null)
+    {
+        <pre class="output">@TicketExportFactory.Create(Format)(Receipt)</pre>
+    }
+    else
+    {
+        <p class="muted">No booking selected. Your e-ticket appears here after you book.</p>
+    }
+
+    <HowItWorks>
+        <code>TicketExportFactory.Create(format)</code> returns a <code>Func&lt;BookingReceipt, string&gt;</code>; the page does not know how each format is built.
+    </HowItWorks>
+</section>
+
+@code {
+    /// <summary>The booking to show. The caller only passes one the user is allowed to see.</summary>
+    [Parameter]
+    public BookingReceipt? Receipt { get; set; }
+
+    [Parameter]
+    public TicketFormat Format { get; set; } = TicketFormat.PlainText;
+
+    [Parameter]
+    public EventCallback<TicketFormat> FormatChanged { get; set; }
+
+    private string TicketDataUri(BookingReceipt receipt)
+    {
+        var (contentType, _) = TicketExportFactory.Describe(Format);
+        var content = TicketExportFactory.Create(Format)(receipt);
+        return $"data:{contentType};charset=utf-8,{Uri.EscapeDataString(content)}";
+    }
+}

@@ -17,7 +17,7 @@ public sealed record PlannerFormSnapshot(
     DateTime TimestampUtc);
 
 /// <summary>
-/// Immutable State Container for Blazor State Management (Criterion 4 & Lecture L33).
+/// Immutable State Container for Blazor State Management.
 /// Stores state history as an ImmutableStack<PlannerFormSnapshot> supporting instant Time-Travel Undo/Redo,
 /// plus Role-Based Access Control (RBAC) state and real-time SignalR/event notifications.
 /// </summary>
@@ -33,11 +33,11 @@ public sealed class ImmutableAppStateContainer
         OfferingKey: "HolidayWithMeals",
         TimestampUtc: DateTime.UtcNow);
 
-    public UserRole CurrentRole { get; private set; } = UserRole.DispatcherAdmin;
+    public UserRole CurrentRole { get; private set; } = UserRole.Passenger;
 
     public ImmutableList<string> LiveSignalRFeed { get; private set; } = ImmutableList.Create(
-        $"[{DateTime.UtcNow:HH:mm:ss}] [SignalR Hub] Connected to RailFlow Telemetry Stream.",
-        $"[{DateTime.UtcNow:HH:mm:ss}] [DispatcherAdmin] Active roadworks initialized at FRANKFURT & LYON (1.10x factor).");
+        $"[{DateTime.UtcNow:HH:mm:ss}] Session started.",
+        $"[{DateTime.UtcNow:HH:mm:ss}] Engineering works at Frankfurt and Lyon: +10% on connections to those stations.");
 
     public event Action? OnStateChanged;
 
@@ -83,7 +83,7 @@ public sealed class ImmutableAppStateContainer
     {
         if (CurrentRole == role) return;
         CurrentRole = role;
-        AppendFeedMessage($"[RBAC Security] Switched active session role to {role}.");
+        AppendFeedMessage(role == UserRole.DispatcherAdmin ? "Signed in as dispatcher." : "Signed in as passenger.");
     }
 
     public void AppendFeedMessage(string message)

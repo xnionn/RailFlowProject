@@ -1,0 +1,163 @@
+@* "Lab" tab, shown only with Course notes switched on: experiments that show the course techniques on their
+   own rather than as part of a trip. The 200,000-section recursion test (trampoline), a checker for station
+   CSV lines (Result-based parsing and a partially applied parser), the route cache (thread-safe memoization)
+   and the loop-style benchmark. It receives the session's LabTabState and the stations typed on the trip form
+   (the search the cache test repeats). The route planner is injected for the cache. *@
+
+@inject RailRoutePlanner RoutePlanner
+
+<p class="page-intro">Course experiments behind the app. Each card names the technique it demonstrates.</p>
+
+<div class="grid-2">
+    <section class="card">
+        <div class="card-head">
+            <div>
+                <h2>Deep recursion</h2>
+                <p class="card-sub">Recursion and trampolining.</p>
+            </div>
+        </div>
+        <p class="small">Adds up the length of a synthetic route with 200,000 sections using a recursive function.</p>
+        <div class="actions">
+            <button class="btn btn-sm btn-primary" @onclick="State.RunStackSafetyCheck">Run the test</button>
+        </div>
+        @if (!string.IsNullOrWhiteSpace(State.StackSafetyMessage))
+        {
+            <div class="alert ok">@State.StackSafetyMessage</div>
+        }
+        <HowItWorks>
+            <code>TotalDistanceTrampolined</code> returns <code>More(() =&gt; next call)</code> instead of calling itself.
+            <code>Trampoline.Run</code> unrolls those steps in a loop, so the call stack never grows.
+        </HowItWorks>
+    </section>
+
+    <section class="card">
+        <div class="card-head">
+            <div>
+                <h2>Route cache</h2>
+                <p class="card-sub">Thread-safe memoization.</p>
+            </div>
+            <div class="inline">
+                <button class="btn btn-sm" @onclick="RunBurstMemoizationTest">Repeat search 50 times</button>
+                <button class="btn btn-sm" @onclick="ClearBfsCache">Clear cache</button>
+            </div>
+        </div>
+        <div class="stats">
+            <StatCard Label="Cached routes" Value="@CacheStats.CachedEntries.ToString("N0")" />
+            <StatCard Label="Hits" Value="@CacheStats.CacheHits.ToString("N0")" />
+            <StatCard Label="Misses" Value="@CacheStats.CacheMisses.ToString("N0")" />
+            <StatCard Label="Hit ratio" Value="@($"{CacheStats.HitRatio:0.#}%")" />
+        </div>
+        @if (!string.IsNullOrWhiteSpace(State.CacheMessage))
+        {
+            <div class="alert" style="margin-top:0.75rem;">@State.CacheMessage</div>
+        }
+        <HowItWorks>
+            The breadth-first route search is wrapped in a memoizer built on <code>ConcurrentDictionary</code> and
+            <code>Lazy&lt;T&gt;</code>, so a repeated search is answered from the cache and two users asking at the same
+            moment still run the search only once.
+        </HowItWorks>
+    </section>
+</div>
+
+<section class="card">
+    <div class="card-head">
+        <div>
+            <h2>Check station data</h2>
+            <p class="card-sub">Parsing with <code>Result</code>. Paste lines in the format of <code>stations.csv</code>.</p>
+        </div>
+    </div>
+
+    <textarea rows="5" @bind="State.CustomCsvInput" aria-label="Station CSV lines"></textarea>
+    <div class="actions">
+        <button class="btn btn-sm btn-primary" @onclick="State.CheckCsv">Check</button>
+        <span class="tag ok">@State.StationValidation.Accepted.Count valid</span>
+        <span class="tag @(State.StationValidation.Rejected.Count > 0 ? "err" : "")">@State.StationValidation.Rejected.Count rejected</span>
+    </div>
+
+    @if (State.CsvRows.Count > 0)
+    {
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th class="num">Line</th>
+                        <th>Cells</th>
+                        <th>Result</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var row in State.CsvRows)
+                    {
+                        <tr class="@(row.Problem is not null ? "rejected" : "")">
+                            <td class="num">@row.LineNumber</td>
+                            <td><code>@string.Join(" | ", row.Cells)</code></td>
+                            <td>
+                                @if (row.IsHeader)
+                                {
+                                    <span class="muted">Header</span>
+                                }
+                                else if (row.Problem is not null)
+                                {
+                                    @row.Problem
+                                }
+                                else
+                                {
+                                    <span class="tag ok">Valid</span>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+
+    <HowItWorks>
+        Each line goes through <code>NetworkCsv.ParseStation : string → Result&lt;GeoCoord&gt;</code>, the same function
+        that loads the real station file, and <code>ParseAll</code> folds the results into accepted and rejected lists.
+        The cells come from a partially applied parser, <code>RawCsvParser.Partial("\n", ",", true)</code>.
+    </HowItWorks>
+</section>
+
+<BenchmarkCard @bind-Entries="State.BenchmarkEntries" />
+
+@code {
+    /// <summary>Kept by Home for the whole session; this component reads and updates it.</summary>
+    [Parameter, EditorRequired]
+    public LabTabState State { get; set; } = new();
+
+    /// <summary>The origin typed on the trip form (the search the cache test repeats).</summary>
+    [Parameter]
+    public string Origin { get; set; } = "";
+
+    /// <summary>The destination typed on the trip form.</summary>
+    [Parameter]
+    public string Destination { get; set; } = "";
+
+    private MemoizationStats CacheStats => RoutePlanner.GraphEngine.GetCacheStats();
+
+    protected override void OnInitialized()
+    {
+        if (State.CsvRows.IsEmpty)
+            State.CheckCsv();
+    }
+
+    private void RunBurstMemoizationTest()
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (var i = 0; i < 50; i++)
+        {
+            RoutePlanner.GraphEngine.FindShortestPathMemoized(Origin, Destination);
+        }
+        sw.Stop();
+        State.CacheMessage =
+            $"50 searches for {UiText.Station(Origin)} → {UiText.Station(Destination)} took {sw.Elapsed.TotalMilliseconds:0.###} ms. " +
+            $"Hit ratio is now {CacheStats.HitRatio:0.#}%.";
+    }
+
+    private void ClearBfsCache()
+    {
+        RoutePlanner.GraphEngine.ClearCache();
+        State.CacheMessage = "Cache cleared.";
+    }
+}

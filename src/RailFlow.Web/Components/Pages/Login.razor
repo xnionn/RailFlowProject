@@ -1,0 +1,115 @@
+@page "/login"
+@using System.ComponentModel.DataAnnotations
+@using Microsoft.AspNetCore.Authentication
+@using Microsoft.AspNetCore.Authentication.Cookies
+@using RailFlow.Infrastructure.Security
+@inject DemoUserStore Users
+@inject NavigationManager Navigation
+
+@* Static server-rendered page (no interactive render mode): the cookie can only be set during a real HTTP request. *@
+
+<PageTitle>Sign in — RailFlow</PageTitle>
+
+<main class="login-page">
+    <section class="card login-card">
+        <a class="brand brand-link" href="">
+            <svg class="brand-mark" width="30" height="30" viewBox="0 0 32 32" aria-hidden="true">
+                <rect width="32" height="32" rx="6" fill="var(--accent)" />
+                <path d="M12 6 L9.5 26 M20 6 L22.5 26" stroke="#fff" stroke-width="2" stroke-linecap="round" />
+                <path d="M11.2 11h9.6 M10.6 16h10.8 M10 21h12" stroke="#fff" stroke-width="1.5" stroke-linecap="round" opacity="0.85" />
+            </svg>
+            <span>RailFlow</span>
+        </a>
+
+        <h1>Sign in</h1>
+        <p class="card-sub">Dispatchers can change engineering works and simulate service failures. Without signing in you get the passenger view.</p>
+
+        @if (_error is not null)
+        {
+            <div class="alert err" role="alert">@_error</div>
+        }
+
+        <EditForm Model="Input" FormName="login" OnValidSubmit="SignInAsync" method="post" Enhance="false">
+            <DataAnnotationsValidator />
+            <input type="hidden" name="Input.ReturnUrl" value="@Input.ReturnUrl" />
+
+            <div class="field">
+                <label for="username">User name</label>
+                <InputText id="username" @bind-Value="Input.UserName" autocomplete="username" />
+                <ValidationMessage For="() => Input.UserName" class="field-error" />
+            </div>
+
+            <div class="field">
+                <label for="password">Password</label>
+                <InputText id="password" type="password" @bind-Value="Input.Password" autocomplete="current-password" />
+                <ValidationMessage For="() => Input.Password" class="field-error" />
+            </div>
+
+            <div class="actions">
+                <button type="submit" class="btn btn-primary">Sign in</button>
+                <a class="btn" href="">Continue as guest</a>
+            </div>
+        </EditForm>
+
+        <p class="muted small">The demo accounts are listed in README.md (section "Signing in").</p>
+    </section>
+</main>
+
+@code {
+    [CascadingParameter]
+    private HttpContext HttpContext { get; set; } = default!;
+
+    [SupplyParameterFromForm]
+    private LoginInput Input { get; set; } = default!;
+
+    [SupplyParameterFromQuery]
+    private string? ReturnUrl { get; set; }
+
+    private string? _error;
+
+    protected override void OnInitialized()
+    {
+        // On the first GET the return address comes from the query string; on POST it comes back in the hidden field.
+        Input ??= new LoginInput();
+        Input.ReturnUrl ??= ReturnUrl;
+    }
+
+    private async Task SignInAsync()
+    {
+        switch (Users.Authenticate(Input.UserName, Input.Password))
+        {
+            case Success<UserAccount> { Data: var account }:
+                var principal = RoleNames.ToPrincipal(account, CookieAuthenticationDefaults.AuthenticationScheme);
+                await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal);
+                Navigation.NavigateTo(LocalReturnUrl(Input.ReturnUrl), forceLoad: true);
+                break;
+
+            case Failure<UserAccount> { Reason: var reason }:
+                _error = reason;
+                Input.Password = "";
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Only same-site paths are accepted, so the login page cannot be used to redirect somewhere else.
+    /// </summary>
+    internal static string LocalReturnUrl(string? returnUrl) =>
+        !string.IsNullOrEmpty(returnUrl)
+        && returnUrl.StartsWith('/')
+        && !returnUrl.StartsWith("//")
+        && !returnUrl.StartsWith("/\\")
+            ? returnUrl
+            : "/";
+
+    private sealed class LoginInput
+    {
+        [Required(ErrorMessage = "Enter your user name.")]
+        public string UserName { get; set; } = "";
+
+        [Required(ErrorMessage = "Enter your password.")]
+        public string Password { get; set; } = "";
+
+        public string? ReturnUrl { get; set; }
+    }
+}

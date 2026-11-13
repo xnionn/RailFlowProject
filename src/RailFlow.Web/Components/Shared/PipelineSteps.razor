@@ -1,0 +1,41 @@
+@* Shows each stage of the route pipeline and what it returned. Clicking a stage selects it. *@
+
+<ol class="steps" aria-label="Pipeline steps">
+    @for (var i = 0; i < Diagnostics.Count; i++)
+    {
+        var step = Diagnostics[i];
+        var number = i + 1;
+        var (tone, label) = Describe(step.Status);
+        <li>
+            <button type="button"
+                    class="step @tone @(ReferenceEquals(step, Selected) ? "selected" : "")"
+                    aria-pressed="@(ReferenceEquals(step, Selected) ? "true" : "false")"
+                    @onclick="() => OnStepSelected.InvokeAsync(step)">
+                <span class="step-num">@number</span>
+                <span class="step-body">
+                    <span class="step-title">@step.StepName</span>
+                    <span class="step-detail">@label · @step.DurationMs.ToString("0.###") ms</span>
+                </span>
+            </button>
+        </li>
+    }
+</ol>
+
+@code {
+    [Parameter, EditorRequired]
+    public ImmutableList<PipelineStepDiagnostic> Diagnostics { get; set; } = ImmutableList<PipelineStepDiagnostic>.Empty;
+
+    [Parameter]
+    public PipelineStepDiagnostic? Selected { get; set; }
+
+    [Parameter]
+    public EventCallback<PipelineStepDiagnostic> OnStepSelected { get; set; }
+
+    private static (string Tone, string Label) Describe(string status) => status switch
+    {
+        "Something" => ("ok", "Done"),
+        "Nothing" => ("warn", "No result"),
+        "Error" => ("err", "Failed"),
+        _ => ("", "Skipped")
+    };
+}
